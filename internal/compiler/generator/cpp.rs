@@ -3467,6 +3467,24 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             sub_expression,
             ctx,
         ),
+        Expression::GridLayoutFunction {
+            cells_variable,
+            repeater_indices,
+            elements,
+            orientation,
+            sub_expression,
+            col_or_row,
+            span
+        } => grid_layout_function(
+            cells_variable,
+            repeater_indices.as_ref().map(SmolStr::as_str),
+            elements.as_ref(),
+            *orientation,
+            sub_expression,
+            ctx,
+            *col_or_row,
+            *span
+        ),
         Expression::ComputeDialogLayoutCells { cells_variable, roles, unsorted_cells } => {
             let cells_variable = ident(cells_variable);
             let mut cells = match &**unsorted_cells {
@@ -4059,6 +4077,78 @@ fn box_layout_function(
     });
     format!(
         "[&]{{ {} {} slint::cbindgen_private::Slice<slint::cbindgen_private::BoxLayoutCellData>{}{{cells_vector.data(), cells_vector.size()}}; return {}; }}()",
+        ri,
+        push_code,
+        ident(cells_variable),
+        compile_expression(sub_expression, ctx)
+    )
+}
+
+fn grid_layout_function(
+    cells_variable: &str,
+    repeated_indices: Option<&str>,
+    elements: &[Either<llr::Expression, llr::RepeatedElementIdx>],
+    orientation: Orientation,
+    sub_expression: &llr::Expression,
+    ctx: &llr_EvaluationContext<CppGeneratorContext>,
+    col_or_row: u16,
+    span: u16
+) -> String {
+    let repeated_indices = repeated_indices.map(ident);
+    let mut push_code =
+        "std::vector<slint::cbindgen_private::GridLayoutCellData> cells_vector;".to_owned();
+    let mut repeater_idx = 0usize;
+
+    for item in elements {
+        match item {
+            Either::Left(value) => {
+                write!(
+                    push_code,
+                    "cells_vector.push_back({{ {} }});",
+                    compile_expression(value, ctx)
+                )
+                .unwrap();
+            }
+            Either::Right(repeater) => {
+                let repeater = usize::from(*repeater);
+                write!(push_code, "self->repeater_{repeater}.ensure_updated(self);").unwrap();
+
+                if let Some(ri) = &repeated_indices {
+                    write!(push_code, "{}_array[{}] = cells_vector.size();", ri, repeater_idx * 2)
+                        .unwrap();
+                    write!(
+                        push_code,
+                        "{ri}_array[{c}] = self->repeater_{id}.len();",
+                        ri = ri,
+                        c = repeater_idx * 2 + 1,
+                        id = repeater,
+                    )
+                    .unwrap();
+                }
+                repeater_idx += 1;
+                write!(
+                    push_code,
+                    "self->repeater_{id}.for_each([&](const auto &sub_comp){{ cells_vector.push_back(sub_comp->grid_layout_data({c} {s} {o})); }});",
+                    id = repeater,
+                    o = to_cpp_orientation(orientation),
+                    c = col_or_row,
+                    s = span,
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    let ri = repeated_indices.as_ref().map_or(String::new(), |ri| {
+        write!(
+            push_code,
+            "slint::cbindgen_private::Slice<int> {ri}{{ {ri}_array.data(), {ri}_array.size() }};"
+        )
+        .unwrap();
+        format!("std::array<int, {}> {}_array;", 2 * repeater_idx, ri)
+    });
+    format!(
+        "[&]{{ {} {} slint::cbindgen_private::Slice<slint::cbindgen_private::GridLayoutCellData>{}{{cells_vector.data(), cells_vector.size()}}; return {}; }}()",
         ri,
         push_code,
         ident(cells_variable),

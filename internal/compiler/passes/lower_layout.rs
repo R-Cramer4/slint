@@ -309,14 +309,14 @@ impl GridLayout {
     ) {
         let index = self.elems.len();
         if let Some(layout_item) = create_layout_item(item_element, diag) {
-            if layout_item.repeater_index.is_some() {
-                diag.push_error(
-                    "'if' or 'for' expressions are not currently supported in grid layouts"
-                        .to_string(),
-                    &*item_element.borrow(),
-                );
-                return;
-            }
+            // if layout_item.repeater_index.is_some() {
+            //     diag.push_error(
+            //         "'if' or 'for' expressions are not currently supported in grid layouts"
+            //             .to_string(),
+            //         &*item_element.borrow(),
+            //     );
+            //     return;
+            // }
 
             let e = &layout_item.elem;
             set_prop_from_cache(e, "x", layout_cache_prop_h, index * 2, &None, diag);
@@ -702,6 +702,7 @@ fn lower_dialog_layout(
     }
 }
 
+#[derive(Debug)]
 struct CreateLayoutItemResult {
     item: LayoutItem,
     elem: ElementRc,

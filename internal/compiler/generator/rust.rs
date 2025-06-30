@@ -1797,6 +1797,15 @@ fn generate_repeated_component(
             {
                 sp::BoxLayoutCellData { constraint: self.as_ref().layout_info(o) }
             }
+            fn grid_layout_data(self: ::core::pin::Pin<&Self>, cor: u16, span: u16, o: sp::Orientation)
+                -> sp::GridLayoutCellData
+            {
+                sp::GridLayoutCellData {
+                    col_or_row: cor, 
+                    span,
+                    constraint: self.as_ref().layout_info(o)
+                }
+            }
         }
     };
 
@@ -2606,6 +2615,24 @@ fn compile_expression(expr: &Expression, ctx: &EvaluationContext) -> TokenStream
             sub_expression,
             ctx,
         ),
+        Expression::GridLayoutFunction {
+            cells_variable,
+            repeater_indices,
+            elements,
+            orientation,
+            sub_expression,
+            col_or_row,
+            span
+        } => grid_layout_function(
+            cells_variable,
+            repeater_indices.as_ref().map(SmolStr::as_str),
+            elements.as_ref(),
+            *orientation,
+            sub_expression,
+            ctx,
+            *col_or_row,
+            *span
+        ),
         Expression::ComputeDialogLayoutCells { cells_variable, roles, unsorted_cells } => {
             let cells_variable = ident(cells_variable);
             let roles = compile_expression(roles, ctx);
@@ -3299,6 +3326,71 @@ fn box_layout_function(
     } }
 }
 
+fn grid_layout_function(
+    cells_variable: &str,
+    repeated_indices: Option<&str>,
+    elements: &[Either<Expression, llr::RepeatedElementIdx>],
+    orientation: Orientation,
+    sub_expression: &Expression,
+    ctx: &EvaluationContext,
+    col_or_row: u16,
+    span: u16
+) -> TokenStream {
+    let repeated_indices = repeated_indices.map(ident);
+    let inner_component_id = self::inner_component_id(ctx.current_sub_component().unwrap());
+    let mut fixed_count = 0usize;
+    let mut repeated_count = quote!();
+    let mut push_code = vec![];
+    let mut repeater_idx = 0usize;
+    for item in elements {
+        match item {
+            Either::Left(value) => {
+                let value = compile_expression(value, ctx);
+                fixed_count += 1;
+                push_code.push(quote!(items_vec.push(#value);))
+            }
+            Either::Right(repeater) => {
+                let repeater_id = format_ident!("repeater{}", usize::from(*repeater));
+                let rep_inner_component_id = self::inner_component_id(
+                    &ctx.compilation_unit.sub_components
+                        [ctx.current_sub_component().unwrap().repeated[*repeater].sub_tree.root],
+                );
+                repeated_count = quote!(#repeated_count + _self.#repeater_id.len());
+                let ri = repeated_indices.as_ref().map(|ri| {
+                    quote!(
+                        #ri[#repeater_idx * 2] = items_vec.len() as u32;
+                        #ri[#repeater_idx * 2 + 1] = internal_vec.len() as u32;
+                    )
+                });
+                repeater_idx += 1;
+                push_code.push(quote!(
+                        #inner_component_id::FIELD_OFFSETS.#repeater_id.apply_pin(_self).ensure_updated(
+                            || { #rep_inner_component_id::new(_self.self_weak.get().unwrap().clone()).unwrap().into() }
+                        );
+                        let internal_vec = _self.#repeater_id.instances_vec();
+                        #ri
+                        for sub_comp in &internal_vec {
+                            items_vec.push(sub_comp.as_pin_ref().grid_layout_data(#col_or_row, #span, #orientation))
+                        }
+                    ));
+            }
+        }
+    }
+
+    let ri = repeated_indices.as_ref().map(|ri| quote!(let mut #ri = [0u32; 2 * #repeater_idx];));
+    let ri2 = repeated_indices.map(|ri| quote!(let #ri = sp::Slice::from_slice(&#ri);));
+    let cells_variable = ident(cells_variable);
+    let sub_expression = compile_expression(sub_expression, ctx);
+
+    quote! { {
+        #ri
+        let mut items_vec = sp::Vec::with_capacity(#fixed_count #repeated_count);
+        #(#push_code)*
+        let #cells_variable = sp::Slice::from_slice(&items_vec);
+        #ri2
+        #sub_expression
+    } }
+}
 // In Rust debug builds, accessing the member of the FIELD_OFFSETS ends up copying the
 // entire FIELD_OFFSETS into a new stack allocation, which with large property
 // binding initialization functions isn't re-used and with large generated inner

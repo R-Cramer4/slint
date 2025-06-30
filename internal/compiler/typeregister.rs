@@ -87,6 +87,7 @@ pub struct BuiltinTypes {
     pub layout_info_type: Rc<Struct>,
     pub path_element_type: Type,
     pub box_layout_cell_data_type: Type,
+    pub grid_layout_cell_data_type: Type,
 }
 
 impl BuiltinTypes {
@@ -147,12 +148,19 @@ impl BuiltinTypes {
                 rust_attributes: None,
             })),
             box_layout_cell_data_type: Type::Struct(Rc::new(Struct {
-                fields: IntoIterator::into_iter([("constraint".into(), layout_info_type.into())])
+                fields: IntoIterator::into_iter([("constraint".into(), layout_info_type.clone().into())])
                     .collect(),
                 name: Some("BoxLayoutCellData".into()),
                 node: None,
                 rust_attributes: None,
             })),
+            grid_layout_cell_data_type: Type::Struct(Rc::new(Struct {
+                fields: IntoIterator::into_iter([("constraint".into(), layout_info_type.into())])
+                    .collect(),
+                name: Some("GridLayoutCellData".into()),
+                node: None,
+                rust_attributes: None,
+            }))
         }
     }
 }
@@ -702,4 +710,9 @@ pub fn path_element_type() -> Type {
 /// The [`Type`] for a runtime BoxLayoutCellData structure
 pub fn box_layout_cell_data_type() -> Type {
     BUILTIN.with(|types| types.box_layout_cell_data_type.clone())
+}
+
+/// The [`Type`] for a runtime GridLayoutCellData structure
+pub fn grid_layout_cell_data_type() -> Type {
+    BUILTIN.with(|types| types.grid_layout_cell_data_type.clone())
 }

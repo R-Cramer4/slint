@@ -343,6 +343,7 @@ impl<'a, T> Display for DisplayExpression<'a, T> {
                 write!(f, "{}[{} % {}]", DisplayPropertyRef(layout_cache_prop, ctx), index, e(ri))
             }
             Expression::BoxLayoutFunction { .. } => write!(f, "BoxLayoutFunction(TODO)",),
+            Expression::GridLayoutFunction { .. } => write!(f, "GridLayoutFunction(TODO)",),
             Expression::ComputeDialogLayoutCells { .. } => {
                 write!(f, "ComputeDialogLayoutCells(TODO)",)
             }

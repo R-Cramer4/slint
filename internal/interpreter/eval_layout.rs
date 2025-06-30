@@ -36,12 +36,14 @@ pub(crate) fn compute_layout_info(
     orientation: Orientation,
     local_context: &mut EvalLocalContext,
 ) -> Value {
+    eprintln!("Computing layout info");
     let component = local_context.component_instance;
     let expr_eval = |nr: &NamedReference| -> f32 {
         eval::load_property(component, &nr.element(), nr.name()).unwrap().try_into().unwrap()
     };
     match lay {
         Layout::GridLayout(grid_layout) => {
+            eprintln!("{:?}", grid_layout);
             let cells = grid_layout_data(grid_layout, orientation, component, &expr_eval);
             let (padding, spacing) =
                 padding_and_spacing(&grid_layout.geometry, orientation, &expr_eval);
@@ -72,6 +74,7 @@ pub(crate) fn solve_layout(
     orientation: Orientation,
     local_context: &mut EvalLocalContext,
 ) -> Value {
+    println!("Solving layout info");
     let component = local_context.component_instance;
     let expr_eval = |nr: &NamedReference| -> f32 {
         eval::load_property(component, &nr.element(), nr.name()).unwrap().try_into().unwrap()
@@ -301,6 +304,7 @@ pub(crate) fn get_layout_info(
     window_adapter: &Rc<dyn WindowAdapter>,
     orientation: Orientation,
 ) -> core_layout::LayoutInfo {
+    eprintln!("Getting layout info");
     let elem = elem.borrow();
     if let Some(nr) = elem.layout_info_prop(orientation) {
         eval::load_property(component, &nr.element(), nr.name()).unwrap().try_into().unwrap()

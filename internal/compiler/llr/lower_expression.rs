@@ -569,11 +569,24 @@ fn compute_layout_info(
     match l {
         crate::layout::Layout::GridLayout(layout) => {
             let (padding, spacing) = generate_layout_padding_and_spacing(&layout.geometry, o, ctx);
-            let cells = grid_layout_cell_data(layout, o, ctx);
-            llr_Expression::ExtraBuiltinFunctionCall {
+            let gld = grid_layout_data(layout, o, ctx);
+            let sub_expression = llr_Expression::ExtraBuiltinFunctionCall {
                 function: "grid_layout_info".into(),
-                arguments: vec![cells, spacing, padding],
+                arguments: vec![gld.cells, spacing, padding],
                 return_ty: crate::typeregister::layout_info_type().into(),
+            };
+            match gld.compute_cells {
+                Some((cells_variable, elements)) => {
+                    llr_Expression::GridLayoutFunction {
+                        cells_variable,
+                        repeater_indices: None,
+                        elements,
+                        orientation: o,
+                        sub_expression: Box::new(sub_expression),
+                        // Need col_or_row and span here
+                    }
+                },
+                None => sub_expression,
             }
         }
         crate::layout::Layout::BoxLayout(layout) => {
@@ -614,11 +627,11 @@ fn solve_layout(
     match l {
         crate::layout::Layout::GridLayout(layout) => {
             let (padding, spacing) = generate_layout_padding_and_spacing(&layout.geometry, o, ctx);
-            let cells = grid_layout_cell_data(layout, o, ctx);
+            let gld = grid_layout_data(layout, o, ctx);
+            let cells_ty = gld.cells.ty(ctx);
             let size = layout_geometry_size(&layout.geometry.rect, o, ctx);
             if let (Some(button_roles), Orientation::Horizontal) = (&layout.dialog_button_roles, o)
             {
-                let cells_ty = cells.ty(ctx);
                 let e = crate::typeregister::BUILTIN.with(|e| e.enums.DialogButtonRole.clone());
                 let roles = button_roles
                     .iter()
@@ -638,7 +651,7 @@ fn solve_layout(
                             as_model: false,
                         }
                         .into(),
-                        unsorted_cells: Box::new(cells),
+                        unsorted_cells: Box::new(gld.cells),
                     },
                     llr_Expression::ExtraBuiltinFunctionCall {
                         function: "solve_grid_layout".into(),
@@ -670,7 +683,7 @@ fn solve_layout(
                             ("size", Type::Float32, size),
                             ("spacing", Type::Float32, spacing),
                             ("padding", padding.ty(ctx), padding),
-                            ("cells", cells.ty(ctx), cells),
+                            ("cells", gld.cells.ty(ctx), gld.cells),
                         ],
                     )],
                     return_ty: Type::LayoutCache,
@@ -758,6 +771,7 @@ fn box_layout_data(
         layout.elems.iter().filter(|i| i.element.borrow().repeated.is_some()).count();
 
     let element_ty = crate::typeregister::box_layout_cell_data_type();
+    eprintln!("box layout data {:?}", element_ty);
 
     if repeater_count == 0 {
         let cells = llr_Expression::Array {
@@ -808,32 +822,78 @@ fn box_layout_data(
     }
 }
 
-fn grid_layout_cell_data(
+struct GridLayoutDataResult {
+    cells: llr_Expression,
+    /// When there are repeater involved, we need to do a GridLayoutFunction with the
+    /// given cell variable and elements
+    compute_cells: Option<(String, Vec<Either<llr_Expression, RepeatedElementIdx>>)>,
+}
+
+fn grid_layout_data(
     layout: &crate::layout::GridLayout,
     orientation: Orientation,
     ctx: &mut ExpressionLoweringCtx,
-) -> llr_Expression {
-    llr_Expression::Array {
-        element_ty: grid_layout_cell_data_ty(),
-        values: layout
-            .elems
-            .iter()
-            .map(|c| {
-                let (col_or_row, span) = c.col_or_row_and_span(orientation);
-                let layout_info =
-                    get_layout_info(&c.item.element, ctx, &c.item.constraints, orientation);
+) -> GridLayoutDataResult {
+    let repeater_count = 
+        layout.elems.iter().filter(|i| i.item.element.borrow().repeated.is_some()).count();
+    let element_ty = crate::typeregister::grid_layout_cell_data_type();
 
-                make_struct(
+    if repeater_count == 0 {
+        // what is currently here
+        let cells = llr_Expression::Array {
+            element_ty: element_ty, 
+            values: layout
+                .elems
+                .iter()
+                .map(|c| {
+                    let (col_or_row, span) = c.col_or_row_and_span(orientation);
+                    let layout_info =
+                        get_layout_info(&c.item.element, ctx, &c.item.constraints, orientation);
+
+                    make_struct(
+                        "GridLayoutCellData",
+                        [
+                            ("constraint", crate::typeregister::layout_info_type().into(), layout_info),
+                            ("col_or_row", Type::Int32, llr_Expression::NumberLiteral(col_or_row as _)),
+                            ("span", Type::Int32, llr_Expression::NumberLiteral(span as _)),
+                        ],
+                    )
+                })
+                .collect(),
+            as_model: false,
+        };
+        GridLayoutDataResult{ cells, compute_cells: None }
+    } else {
+        // has multiple elements
+        let mut elements = vec![];
+        for item in &layout.elems {
+            if item.item.element.borrow().repeated.is_some() {
+                let repeater_index = 
+                    match ctx.mapping.element_mapping.get(&item.item.element.clone().into()).unwrap() {
+                    LoweredElement::Repeated { repeated_index } => *repeated_index,
+                    _ => panic!(),
+                };
+                elements.push(Either::Right(repeater_index))
+            } else {
+                let (col_or_row, span) = item.col_or_row_and_span(orientation);
+                let layout_info = 
+                    get_layout_info(&item.item.element, ctx, &item.item.constraints, orientation);
+                elements.push(Either::Left(make_struct(
                     "GridLayoutCellData",
                     [
                         ("constraint", crate::typeregister::layout_info_type().into(), layout_info),
                         ("col_or_row", Type::Int32, llr_Expression::NumberLiteral(col_or_row as _)),
                         ("span", Type::Int32, llr_Expression::NumberLiteral(span as _)),
                     ],
-                )
-            })
-            .collect(),
-        as_model: false,
+                )))
+            }
+        }
+        let cells = llr_Expression::ReadLocalVariable {
+            name: "cells".into(),
+            ty: Type::Array(Rc::new(crate::typeregister::layout_info_type().into())),
+        };
+
+        GridLayoutDataResult { cells, compute_cells: Some(("cells".into(), elements)) }
     }
 }
 

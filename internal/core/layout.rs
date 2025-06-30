@@ -430,7 +430,7 @@ pub struct GridLayoutData<'a> {
 }
 
 #[repr(C)]
-#[derive(Default, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct GridLayoutCellData {
     /// col, or row.
     pub col_or_row: u16,

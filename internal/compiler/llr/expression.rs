@@ -180,6 +180,21 @@ pub enum Expression {
         sub_expression: Box<Expression>,
     },
 
+    /// Will call the sub_expression, with the cell variable set to the
+    /// array of GridLayoutCellData from the elements
+    GridLayoutFunction {
+        /// The local variable (as read with [`Self::ReadLocalVariable`]) that contains the sell
+        cells_variable: String,
+        /// The name for the local variable that contains the repeater indices
+        repeater_indices: Option<SmolStr>,
+        /// Either an expression of type GridLayoutCellData, or an index to the repeater
+        elements: Vec<Either<Expression, RepeatedElementIdx>>,
+        orientation: Orientation,
+        sub_expression: Box<Expression>,
+        col_or_row: u16,
+        span: u16,
+    },
+
     ComputeDialogLayoutCells {
         /// The local variable where the slice of cells is going to be stored
         cells_variable: String,
@@ -314,6 +329,7 @@ impl Expression {
             Self::EnumerationValue(e) => Type::Enumeration(e.enumeration.clone()),
             Self::LayoutCacheAccess { .. } => Type::LogicalLength,
             Self::BoxLayoutFunction { sub_expression, .. } => sub_expression.ty(ctx),
+            Self::GridLayoutFunction { sub_expression, ..} => sub_expression.ty(ctx),
             Self::ComputeDialogLayoutCells { .. } => {
                 Type::Array(super::lower_expression::grid_layout_cell_data_ty().into())
             }
@@ -391,6 +407,10 @@ macro_rules! visit_impl {
                 }
             }
             Expression::BoxLayoutFunction { elements, sub_expression, .. } => {
+                $visitor(sub_expression);
+                elements.$iter().filter_map(|x| x.$as_ref().left()).for_each($visitor);
+            }
+            Expression::GridLayoutFunction { elements, sub_expression, .. } => {
                 $visitor(sub_expression);
                 elements.$iter().filter_map(|x| x.$as_ref().left()).for_each($visitor);
             }
