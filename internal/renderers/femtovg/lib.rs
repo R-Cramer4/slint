@@ -176,16 +176,16 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                 }
 
                 if let Some(notifier_fn) = self.rendering_notifier.borrow_mut().as_mut() {
-                    let mut femtovg_canvas = canvas.borrow_mut();
-                    // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
-                    // the back buffer, in order to allow the callback to provide its own rendering of the background.
-                    // femtovg's clear_rect() will merely schedule a clear call, so flush right away to make it immediate.
-
-                    let commands = femtovg_canvas.flush_to_surface(surface.render_surface());
-                    self.graphics_backend.submit_commands(commands);
-
-                    femtovg_canvas.set_size(width.get(), height.get(), scale);
-                    drop(femtovg_canvas);
+                    // let mut femtovg_canvas = canvas.borrow_mut();
+                    // // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
+                    // // the back buffer, in order to allow the callback to provide its own rendering of the background.
+                    // // femtovg's clear_rect() will merely schedule a clear call, so flush right away to make it immediate.
+                    //
+                    // let commands = femtovg_canvas.flush_to_surface(surface.render_surface());
+                    // self.graphics_backend.submit_commands(commands);
+                    //
+                    // femtovg_canvas.set_size(width.get(), height.get(), scale);
+                    // drop(femtovg_canvas);
 
                     self.with_graphics_api(|api| {
                         notifier_fn.notify(RenderingState::BeforeRendering, &api)
