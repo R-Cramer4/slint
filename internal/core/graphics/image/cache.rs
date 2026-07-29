@@ -32,6 +32,7 @@ impl clru::WeightScale<ImageCacheKey, ImageInner> for ImageWeightInBytes {
             ImageInner::NineSlice(nine) => self.weight(_key, &nine.0),
             #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
             ImageInner::WGPUTexture(..) => 0, // The texture is imported from the application and will never reside in our cache.
+            ImageInner::Procedural(..) => 0, // Never cached: `cache_key()` returns None for procedural images.
         }
     }
 }

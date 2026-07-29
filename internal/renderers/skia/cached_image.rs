@@ -85,6 +85,28 @@ pub(crate) fn as_skia_image(
                 pixels.width() as usize * 4,
             )
         }
+        ImageInner::Procedural(procedural, _generation) => {
+            let pixels = match procedural.render_to_buffer()? {
+                SharedImageBuffer::RGB8(_) => unreachable!(),
+                SharedImageBuffer::RGBA8(_) => unreachable!(),
+                SharedImageBuffer::RGBA8Premultiplied(pixels) => pixels,
+            };
+
+            let alpha_type = opaque_or(pixels.as_bytes(), skia_safe::AlphaType::Premul);
+
+            let image_info = skia_safe::ImageInfo::new(
+                skia_safe::ISize::new(pixels.width() as i32, pixels.height() as i32),
+                skia_safe::ColorType::RGBA8888,
+                alpha_type,
+                None,
+            );
+
+            skia_safe::images::raster_from_data(
+                &image_info,
+                skia_safe::Data::new_copy(pixels.as_bytes()),
+                pixels.width() as usize * 4,
+            )
+        }
         ImageInner::StaticTextures(_) => todo!(),
         ImageInner::BackendStorage(x) => {
             vtable::VRc::borrow(x).downcast::<SkiaCachedImage>().map(|x| x.image.clone())
@@ -109,21 +131,20 @@ pub(crate) fn as_skia_image(
     }
 }
 
-fn image_buffer_to_skia_image(buffer: &SharedImageBuffer) -> Option<skia_safe::Image> {
-    // Report fully opaque images as such to Skia. This allows Skia to skip
-    // reading destination pixels back when blending, which is particularly
-    // important for the software renderer when it renders directly into
-    // write-combined (uncached) frame buffer memory, where CPU reads are an
-    // order of magnitude slower than writes. The scan happens once per image;
-    // the resulting skia_safe::Image is cached.
-    fn opaque_or(rgba_bytes: &[u8], alpha_type: skia_safe::AlphaType) -> skia_safe::AlphaType {
-        if rgba_bytes.chunks_exact(4).all(|px| px[3] == 255) {
-            skia_safe::AlphaType::Opaque
-        } else {
-            alpha_type
-        }
+// Reports fully opaque images as such to Skia. This allows Skia to skip reading destination
+// pixels back when blending, which is particularly important for the software renderer when it
+// renders directly into write-combined (uncached) frame buffer memory, where CPU reads are an
+// order of magnitude slower than writes.
+fn opaque_or(rgba_bytes: &[u8], alpha_type: skia_safe::AlphaType) -> skia_safe::AlphaType {
+    if rgba_bytes.chunks_exact(4).all(|px| px[3] == 255) {
+        skia_safe::AlphaType::Opaque
+    } else {
+        alpha_type
     }
+}
 
+fn image_buffer_to_skia_image(buffer: &SharedImageBuffer) -> Option<skia_safe::Image> {
+    // The scan happens once per image; the resulting skia_safe::Image is cached.
     let (data, bpl, size, color_type, alpha_type) = match buffer {
         SharedImageBuffer::RGB8(pixels) => {
             // RGB888 with one byte per component is not supported by Skia right now. Convert once to RGBA8 :-(

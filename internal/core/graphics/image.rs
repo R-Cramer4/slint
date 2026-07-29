@@ -348,6 +348,7 @@ impl ImageCacheKey {
             ImageInner::NineSlice(nine) => vtable::VRc::borrow(nine).cache_key(),
             #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
             ImageInner::WGPUTexture(..) => return None,
+            ImageInner::Procedural(..) => return None,
         };
         if matches!(key, ImageCacheKey::Invalid) { None } else { Some(key) }
     }
@@ -375,6 +376,68 @@ impl OpaqueImage for NineSliceImage {
     fn cache_key(&self) -> ImageCacheKey {
         ImageCacheKey::new(&self.0).unwrap_or(ImageCacheKey::Invalid)
     }
+}
+
+/// Represents an Image that is rendered by the render closure
+pub struct ProceduralImage {
+    size: IntSize,
+    buffer: core::cell::RefCell<SharedPixelBuffer<Rgba8Pixel>>,
+    render: core::cell::RefCell<
+        alloc::boxed::Box<dyn FnMut(&mut [Rgba8Pixel], crate::api::PhysicalSize) -> bool>,
+    >,
+    generation: core::cell::Cell<u64>,
+}
+
+impl ProceduralImage {
+    /// Returns the (fixed) size of this procedural image.
+    pub fn size(&self) -> IntSize {
+        self.size
+    }
+
+    /// Re-invokes the rendering closure and returns the resulting buffer contents.
+    pub fn render_to_buffer(&self) -> Option<SharedImageBuffer> {
+        if self.size.width == 0 || self.size.height == 0 {
+            return None;
+        }
+        let mut buffer = self.buffer.borrow_mut();
+        if buffer.size() != self.size {
+            *buffer = SharedPixelBuffer::new(self.size.width, self.size.height);
+        }
+        let physical_size = crate::api::PhysicalSize::new(self.size.width, self.size.height);
+        // The buffer is reused across calls (`make_mut_slice()` only copies if some other
+        // code is still holding a reference to the previous frame's buffer)
+        (self.render.borrow_mut())(buffer.make_mut_slice(), physical_size);
+        Some(SharedImageBuffer::RGBA8Premultiplied(buffer.clone()))
+    }
+
+    fn bump_generation(&self) -> u64 {
+        let next = self.generation.get() + 1;
+        self.generation.set(next);
+        next
+    }
+}
+
+impl OpaqueImage for ProceduralImage {
+    fn size(&self) -> IntSize {
+        self.size()
+    }
+    fn cache_key(&self) -> ImageCacheKey {
+        ImageCacheKey::Invalid
+    }
+}
+
+impl core::fmt::Debug for ProceduralImage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ProceduralImage")
+            .field("size", &self.size)
+            .field("generation", &self.generation.get())
+            .finish()
+    }
+}
+
+OpaqueImageVTable_static! {
+    /// VTable for RC wrapped procedural image helper struct.
+    pub static PROCEDURAL_IMAGE_VT for ProceduralImage
 }
 
 /// Represents a `wgpu::Texture` for each version of WGPU we support.
@@ -436,6 +499,9 @@ pub enum ImageInner {
     NineSlice(vtable::VRc<OpaqueImageVTable, NineSliceImage>) = 7,
     #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
     WGPUTexture(WGPUTexture) = 8,
+    /// An image whose pixels are (re-)computed on demand by an application-provided closure.
+    /// The `u64` is a snapshot of the generation counter at the time this value was created
+    Procedural(vtable::VRc<OpaqueImageVTable, ProceduralImage>, u64) = 9,
 }
 
 impl ImageInner {
@@ -524,6 +590,7 @@ impl ImageInner {
                 Some(SharedImageBuffer::RGBA8Premultiplied(buffer))
             }
             ImageInner::NineSlice(nine) => nine.0.render_to_buffer(None),
+            ImageInner::Procedural(procedural, _) => procedural.render_to_buffer(),
             _ => None,
         }
     }
@@ -555,6 +622,7 @@ impl ImageInner {
             ImageInner::NineSlice(nine) => nine.0.size(),
             #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
             ImageInner::WGPUTexture(texture) => texture.size(),
+            ImageInner::Procedural(procedural, _) => procedural.size(),
         }
     }
 
@@ -678,6 +746,9 @@ impl PartialEq for ImageInner {
             #[cfg(not(target_arch = "wasm32"))]
             (Self::BorrowedOpenGLTexture(l0), Self::BorrowedOpenGLTexture(r0)) => l0 == r0,
             (Self::NineSlice(l), Self::NineSlice(r)) => l.0 == r.0 && l.1 == r.1,
+            (Self::Procedural(l0, l1), Self::Procedural(r0, r1)) => {
+                vtable::VRc::ptr_eq(l0, r0) && l1 == r1
+            }
             _ => false,
         }
     }
@@ -847,6 +918,37 @@ impl Image {
             cache_key: ImageCacheKey::Invalid,
             buffer: SharedImageBuffer::RGBA8Premultiplied(buffer),
         })
+    }
+
+    /// Creates a new Image of the given size, whose pixels are computed on demand by `render`
+    /// (row-major, alpha-premultiplied) whenever Slint actually composites it. The buffer is
+    /// reused across calls, so filling it in doesn't allocate as long as nothing else still
+    /// holds a reference to the previous frame.
+    ///
+    /// Repainting is not automatic: after producing a new frame, call
+    /// [`Self::mark_procedural_dirty`] before handing the `Image` back to Slint (e.g.
+    /// re-assigning it to the same property).
+    pub fn from_procedural(
+        width: u32,
+        height: u32,
+        render: impl FnMut(&mut [Rgba8Pixel], crate::api::PhysicalSize) -> bool + 'static,
+    ) -> Self {
+        let procedural = ProceduralImage {
+            size: [width, height].into(),
+            buffer: core::cell::RefCell::new(SharedPixelBuffer::new(width, height)),
+            render: core::cell::RefCell::new(alloc::boxed::Box::new(render)),
+            generation: core::cell::Cell::new(0),
+        };
+        Image(ImageInner::Procedural(vtable::VRc::new(procedural), 0))
+    }
+
+    /// Signals that a procedural image (created with [`Self::from_procedural`]) has new content
+    /// to render. Returns false if not a procedural image, and must be called so the updated image
+    /// is drawn to the screen
+    pub fn mark_procedural_dirty(&mut self) -> bool {
+        let ImageInner::Procedural(procedural, generation) = &mut self.0 else { return false };
+        *generation = procedural.bump_generation();
+        true
     }
 
     /// Returns the pixel buffer for the Image if available in RGB format without alpha.
@@ -1790,5 +1892,51 @@ mod tests {
         let pixel = Rgba8Pixel::new(10, 20, 30, 128);
         let converted = Image::rgba_to_premultiplied_rgba(pixel);
         assert_eq!(converted, Rgba8Pixel::new(5, 10, 15, 128));
+    }
+
+    #[test]
+    fn test_procedural_image_generation_drives_equality() {
+        use super::{ImageInner, SharedImageBuffer};
+        use alloc::rc::Rc;
+        use core::cell::Cell;
+
+        let render_count = Rc::new(Cell::new(0u32));
+        let render_count2 = render_count.clone();
+        let mut image = Image::from_procedural(4, 4, move |buf, size| {
+            assert_eq!(size.width, 4);
+            assert_eq!(size.height, 4);
+            assert_eq!(buf.len(), 16);
+            render_count2.set(render_count2.get() + 1);
+            true
+        });
+
+        // An unmodified clone of the same handle must compare equal: re-assigning it to a
+        // property without signaling a new frame must not look like a change.
+        let clone_before = image.clone();
+        assert_eq!(image, clone_before);
+
+        // After marking dirty, a fresh clone must compare unequal to the earlier snapshot,
+        // but equal to a clone taken after the signal.
+        assert!(image.mark_procedural_dirty());
+        let clone_after = image.clone();
+        assert_ne!(clone_before, clone_after);
+        assert_eq!(image, clone_after);
+
+        let inner: &ImageInner = (&image).into();
+        let buffer = inner.render_to_buffer(None).expect("procedural image should render");
+        assert_eq!(render_count.get(), 1);
+        match buffer {
+            SharedImageBuffer::RGBA8Premultiplied(pixels) => {
+                assert_eq!(pixels.width(), 4);
+                assert_eq!(pixels.height(), 4);
+            }
+            _ => panic!("expected RGBA8Premultiplied"),
+        }
+    }
+
+    #[test]
+    fn test_mark_procedural_dirty_is_noop_for_other_images() {
+        let mut image = Image::from_rgba8(super::SharedPixelBuffer::new(1, 1));
+        assert!(!image.mark_procedural_dirty());
     }
 }
