@@ -243,7 +243,8 @@ fn embed_image(
 
     #[cfg(feature = "renderer-software")]
     if embed_files == EmbedResourcesKind::EmbedTextures {
-        return match load_image(_file, _scale_factor, _font_collection) {
+        return match load_image(_file, _scale_factor, _font_collection, path, diag, source_location)
+        {
             Ok((img, source_format, original_size)) => {
                 let resource_id = push(EmbeddedResourcesKind::TextureData(generate_texture(
                     img,
@@ -532,6 +533,9 @@ fn load_image(
     file: crate::fileaccess::VirtualFile,
     scale_factor: f32,
     font_collection: Option<&SharedFontCollection>,
+    path: &str,
+    diag: &mut BuildDiagnostics,
+    source_location: &Option<crate::diagnostics::SourceLocation>,
 ) -> image::ImageResult<(image::RgbaImage, SourceFormat, Size)> {
     use std::ffi::OsStr;
 
@@ -543,7 +547,267 @@ fn load_image(
         std::fs::read(&file.canon_path)?
     };
 
+    if source_is_animated(&data, extension) {
+        diag.push_warning(
+            format!(
+                "{path} is an animated image, but compile-time texture embedding only \
+                 keeps its first frame; the animation will not play"
+            ),
+            source_location,
+        );
+    }
+
     load_image_from_bytes(&data, extension, scale_factor, font_collection)
+}
+
+/// Cheap best-effort sniff for whether encoded image bytes represent a
+/// multi-frame animation (GIF, animated PNG, animated WebP). Used only to warn
+/// when compile-time texture embedding (`@image-url`, MCU/no_std targets with
+/// no allocator for a frame array) is about to flatten one to a single static
+/// frame. Not a decoder: returns `false` on anything malformed rather than
+/// erroring, since getting this wrong just means a missed warning, not a
+/// build failure.
+#[cfg(feature = "renderer-software")]
+fn source_is_animated(data: &[u8], extension: Option<&str>) -> bool {
+    match extension.map(|e| e.to_ascii_lowercase()).as_deref() {
+        Some("gif") => gif_has_multiple_frames(data),
+        Some("png") => png_is_apng(data),
+        Some("webp") => webp_has_animation(data),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "renderer-software")]
+fn png_is_apng(data: &[u8]) -> bool {
+    const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if !data.starts_with(SIG) {
+        return false;
+    }
+    let mut pos = SIG.len();
+    while pos + 8 <= data.len() {
+        let Ok(len_bytes) = <[u8; 4]>::try_from(&data[pos..pos + 4]) else { return false };
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let chunk_type = &data[pos + 4..pos + 8];
+        if chunk_type == b"acTL" {
+            return true;
+        }
+        if chunk_type == b"IDAT" || chunk_type == b"IEND" {
+            // acTL, if present, must appear before the first IDAT.
+            return false;
+        }
+        // length(4) + type(4) + data(len) + crc(4)
+        pos += 12usize.saturating_add(len);
+    }
+    false
+}
+
+#[cfg(feature = "renderer-software")]
+fn webp_has_animation(data: &[u8]) -> bool {
+    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
+        return false;
+    }
+    let mut pos = 12;
+    while pos + 8 <= data.len() {
+        let fourcc = &data[pos..pos + 4];
+        let Ok(size_bytes) = <[u8; 4]>::try_from(&data[pos + 4..pos + 8]) else { return false };
+        let size = u32::from_le_bytes(size_bytes) as usize;
+        if fourcc == b"ANIM" {
+            return true;
+        }
+        // Chunks are padded to an even size.
+        pos += 8usize.saturating_add(size).saturating_add(size % 2);
+    }
+    false
+}
+
+/// Walks the GIF block structure just far enough to count image descriptors
+/// (frames); a GIF with more than one is animated. Correctly skips extension
+/// and image sub-block chains (each a length byte followed by that many
+/// bytes, terminated by a zero-length block) so it isn't confused by pixel or
+/// metadata bytes that happen to look like a block introducer.
+#[cfg(feature = "renderer-software")]
+fn gif_has_multiple_frames(data: &[u8]) -> bool {
+    fn skip_sub_blocks(data: &[u8], pos: &mut usize) -> Option<()> {
+        loop {
+            let len = *data.get(*pos)? as usize;
+            *pos += 1;
+            if len == 0 {
+                return Some(());
+            }
+            *pos += len;
+        }
+    }
+
+    fn frame_count_at_least_two(data: &[u8]) -> Option<bool> {
+        if !(data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) {
+            return Some(false);
+        }
+        let mut pos = 6usize;
+        // Logical screen descriptor: width(2) height(2) packed(1) bgcolor(1) pixel-aspect(1)
+        let packed = *data.get(pos + 4)?;
+        pos += 7;
+        if packed & 0x80 != 0 {
+            pos += 3usize << ((packed & 0x07) as usize + 1);
+        }
+
+        let mut frame_count = 0;
+        loop {
+            match *data.get(pos)? {
+                0x21 => {
+                    // Extension: introducer + label, then sub-blocks.
+                    pos += 2;
+                    skip_sub_blocks(data, &mut pos)?;
+                }
+                0x2C => {
+                    frame_count += 1;
+                    if frame_count >= 2 {
+                        return Some(true);
+                    }
+                    // Image descriptor: left(2) top(2) width(2) height(2) packed(1)
+                    let img_packed = *data.get(pos + 9)?;
+                    pos += 10;
+                    if img_packed & 0x80 != 0 {
+                        pos += 3usize << ((img_packed & 0x07) as usize + 1);
+                    }
+                    // Image data: LZW min code size, then sub-blocks.
+                    pos += 1;
+                    skip_sub_blocks(data, &mut pos)?;
+                }
+                _ => return Some(false), // trailer (0x3B) or malformed data
+            }
+        }
+    }
+
+    frame_count_at_least_two(data).unwrap_or(false)
+}
+
+#[cfg(all(test, feature = "renderer-software"))]
+mod animated_sniff_tests {
+    use super::*;
+
+    fn gif_with_frames(frame_count: usize) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"GIF89a");
+        // Logical screen descriptor: 1x1, no global color table.
+        data.extend_from_slice(&[1, 0, 1, 0, 0x00, 0, 0]);
+        for _ in 0..frame_count {
+            // Image descriptor: left=0 top=0 width=1 height=1, no local color table.
+            data.push(0x2C);
+            data.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0, 0x00]);
+            // Image data: LZW min code size, one sub-block, then terminator.
+            data.push(2);
+            data.push(1);
+            data.push(0x00);
+            data.push(0);
+        }
+        data.push(0x3B);
+        data
+    }
+
+    #[test]
+    fn gif_single_frame_is_not_animated() {
+        assert!(!gif_has_multiple_frames(&gif_with_frames(1)));
+    }
+
+    #[test]
+    fn gif_multi_frame_is_animated() {
+        assert!(gif_has_multiple_frames(&gif_with_frames(2)));
+    }
+
+    #[test]
+    fn gif_with_extension_blocks_between_frames_is_still_detected() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"GIF89a");
+        data.extend_from_slice(&[1, 0, 1, 0, 0x00, 0, 0]);
+        // NETSCAPE2.0 application extension (loop count), a realistic real-world block.
+        data.push(0x21);
+        data.push(0xFF);
+        data.push(11);
+        data.extend_from_slice(b"NETSCAPE2.0");
+        data.push(3);
+        data.extend_from_slice(&[1, 0, 0]);
+        data.push(0);
+        data.extend_from_slice(&gif_with_frames(2)[13..]); // reuse the two-frame body
+        assert!(gif_has_multiple_frames(&data));
+    }
+
+    #[test]
+    fn non_gif_bytes_are_not_animated() {
+        assert!(!gif_has_multiple_frames(b"not a gif"));
+        assert!(!gif_has_multiple_frames(&[]));
+    }
+
+    fn png_chunk(chunk_type: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        chunk.extend_from_slice(chunk_type);
+        chunk.extend_from_slice(data);
+        chunk.extend_from_slice(&[0, 0, 0, 0]); // fake CRC; not validated by our sniff
+        chunk
+    }
+
+    #[test]
+    fn png_without_actl_is_not_apng() {
+        let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
+        data.extend(png_chunk(b"IHDR", &[0; 13]));
+        data.extend(png_chunk(b"IDAT", &[]));
+        data.extend(png_chunk(b"IEND", &[]));
+        assert!(!png_is_apng(&data));
+    }
+
+    #[test]
+    fn png_with_actl_before_idat_is_apng() {
+        let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
+        data.extend(png_chunk(b"IHDR", &[0; 13]));
+        data.extend(png_chunk(b"acTL", &[0; 8]));
+        data.extend(png_chunk(b"IDAT", &[]));
+        data.extend(png_chunk(b"IEND", &[]));
+        assert!(png_is_apng(&data));
+    }
+
+    #[test]
+    fn non_png_bytes_are_not_apng() {
+        assert!(!png_is_apng(b"not a png"));
+    }
+
+    fn riff_chunk(fourcc: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(fourcc);
+        chunk.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(data);
+        if data.len() % 2 != 0 {
+            chunk.push(0);
+        }
+        chunk
+    }
+
+    fn riff_container(chunks: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"RIFF");
+        data.extend_from_slice(&((chunks.len() + 4) as u32).to_le_bytes());
+        data.extend_from_slice(b"WEBP");
+        data.extend_from_slice(chunks);
+        data
+    }
+
+    #[test]
+    fn static_webp_is_not_animated() {
+        let chunks = riff_chunk(b"VP8 ", &[0; 4]);
+        assert!(!webp_has_animation(&riff_container(&chunks)));
+    }
+
+    #[test]
+    fn animated_webp_is_detected() {
+        let mut chunks = riff_chunk(b"VP8X", &[0; 10]);
+        chunks.extend(riff_chunk(b"ANIM", &[0; 6]));
+        chunks.extend(riff_chunk(b"ANMF", &[0; 4]));
+        assert!(webp_has_animation(&riff_container(&chunks)));
+    }
+
+    #[test]
+    fn non_webp_bytes_are_not_animated() {
+        assert!(!webp_has_animation(b"not a webp"));
+    }
 }
 
 fn embed_data_uri(
@@ -587,6 +851,14 @@ fn embed_data_uri(
 
     #[cfg(feature = "renderer-software")]
     if _embed_files == EmbedResourcesKind::EmbedTextures {
+        if source_is_animated(&decoded_data, Some(&extension)) {
+            diag.push_warning(
+                "this data: URI is an animated image, but compile-time texture embedding \
+                 only keeps its first frame; the animation will not play"
+                    .into(),
+                source_location,
+            );
+        }
         match load_image_from_bytes(
             &decoded_data,
             Some(&extension),

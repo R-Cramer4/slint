@@ -45,6 +45,10 @@ display-diagnostics = ["i-slint-compiler/display-diagnostics"]
 ## This feature has no effect on the web, where the browser decodes images.
 image-default-formats = ["i-slint-core/image-default-formats"]
 
+## Enable playback of animated GIF, animated PNG and animated WebP images in the
+## `Image` element. See the `slint` crate feature of the same name.
+animated-images = ["i-slint-core/animated-images"]
+
 
 # (internal) export C++ FFI functions
 ffi = ["spin_on", "i-slint-core/ffi"]

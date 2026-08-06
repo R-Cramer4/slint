@@ -52,6 +52,11 @@ unicode = ["unicode-script", "unicode-linebreak"]
 # browser decodes encoded image data.
 image-decoders = ["dep:image", "dep:clru"]
 image-default-formats = ["image?/default-formats"]
+# Decode and play back animated GIF, animated PNG and animated WebP images in the
+# `Image` element. Independent of `image-default-formats` so enabling animated
+# images doesn't also pull in AVIF, EXR, TIFF and the rest of that umbrella.
+# Not supported on wasm, where the browser decodes images (see internal/core/graphics/image/animated.rs).
+animated-images = ["image-decoders", "image?/gif", "image?/png", "image?/webp"]
 svg = ["dep:resvg", "i-slint-common/svg-text"]
 
 box-shadow-cache = []

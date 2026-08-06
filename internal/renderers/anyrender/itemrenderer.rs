@@ -248,6 +248,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         let image_data = self.item_image_cache.get_or_update_cache_entry(item_rc, || {
             load_image(
                 image.source(),
+                image.current_frame(),
                 &|| image.target_size(),
                 resolve_image_fit(),
                 self.scale_factor,
@@ -695,6 +696,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
     fn draw_image_direct(&mut self, image: i_slint_core::graphics::Image) {
         let Some(image_data) = load_image(
             image.clone(),
+            0,
             &|| LogicalSize::from_untyped(image.size().cast()),
             ImageFit::Fill,
             self.scale_factor,
@@ -1213,6 +1215,7 @@ pub(crate) fn to_peniko_color(color: Color) -> peniko::Color {
 
 fn load_image(
     image: Image,
+    frame: u32,
     target_size_fn: &dyn Fn() -> LogicalSize,
     image_fit: ImageFit,
     scale_factor: ScaleFactor,
@@ -1227,6 +1230,12 @@ fn load_image(
             Some(cache_key.clone()),
             ImageVariant::Full,
             || image_buffer_to_peniko_image(buffer),
+        ),
+        #[cfg(feature = "animated-images")]
+        ImageInner::AnimatedImage(animated) => image_cache.borrow_mut().get_or_insert(
+            ImageCacheKey::new(image_inner),
+            ImageVariant::Frame { index: frame },
+            || image_buffer_to_peniko_image(&animated.frame(frame as usize)),
         ),
         ImageInner::Svg(svg) => {
             // Query target_width/height here again to ensure that changes will invalidate the item rendering cache.
@@ -1274,16 +1283,21 @@ fn load_image(
             ImageCacheKey::new(image_inner),
             ImageVariant::Full,
             || {
-                let buffer = image_inner.render_to_buffer(None)?;
+                let buffer = image_inner.render_to_buffer(0, None)?;
                 image_buffer_to_peniko_image(&buffer)
             },
         ),
         // Backend storage is only produced by other renderers in the same
         // process; their data is not usable here.
         ImageInner::BackendStorage(..) => None,
-        ImageInner::NineSlice(n) => {
-            load_image(n.image(), target_size_fn, ImageFit::Preserve, scale_factor, image_cache)
-        }
+        ImageInner::NineSlice(n) => load_image(
+            n.image(),
+            frame,
+            target_size_fn,
+            ImageFit::Preserve,
+            scale_factor,
+            image_cache,
+        ),
         // Remaining variants hold live GPU resources (borrowed GL textures,
         // wgpu textures behind the unstable-wgpu-* features) that this
         // backend-agnostic renderer cannot import.

@@ -30,6 +30,7 @@ impl OpaqueImage for SkiaCachedImage {
 
 pub(crate) fn as_skia_image(
     image: Image,
+    frame: u32,
     target_size_fn: &dyn Fn() -> LogicalSize,
     image_fit: ImageFit,
     scale_factor: ScaleFactor,
@@ -93,12 +94,21 @@ pub(crate) fn as_skia_image(
         }
         ImageInner::NineSlice(n) => as_skia_image(
             n.image(),
+            frame,
             target_size_fn,
             ImageFit::Preserve,
             scale_factor,
             canvas,
             surface,
         ),
+        // Deliberately not going through `core_cache::replace_cached_image` the way the
+        // EmbeddedImage arm above does: that call swaps the decoded ImageInner in the
+        // *global* decode cache for an SkImage-backed BackendStorage, which would freeze
+        // the animation at whatever frame first got drawn.
+        #[cfg(feature = "animated-images")]
+        ImageInner::AnimatedImage(animated) => {
+            image_buffer_to_skia_image(&animated.frame(frame as usize))
+        }
         #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
         ImageInner::WGPUTexture(any_wgpu_texture) => {
             surface.and_then(|surface| surface.import_wgpu_texture(canvas, any_wgpu_texture))

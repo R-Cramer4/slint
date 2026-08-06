@@ -35,6 +35,22 @@ AVIF, BMP, DDS, Farbfeld, GIF, HDR, ICO, JPEG, EXR, PNG, PNM, QOI, TGA, TIFF, We
 On the web, the browser decodes images, so every format the browser supports works.
 Compressed SVG (`.svgz`) is the exception: browsers don't render it.
 
+GIF, animated PNG and animated WebP files play back automatically when assigned to an
+`Image` element's `source`; see the <Link type="Image" label="Image element"/> for the
+`running` property that pauses and resumes playback. This requires the `animated-images`
+feature (see below) and isn't supported on the web, where animated sources show only
+their first frame. For sprite sheets with a uniform frame size and delay, the
+[sprite-sheet example](https://github.com/slint-ui/slint/tree/master/examples/sprite-sheet)
+remains the right tool, and works everywhere including the web.
+
+Animated formats are decoded eagerly: every frame is kept in memory as a separate
+RGBA buffer for as long as the image is in use, so a large or long animation can use
+significantly more memory than its file size suggests (a 480×270 GIF with 60 frames is
+already around 31 MB decoded, for example). Compile-time texture embedding for the
+software renderer (`@image-url` on MCU/`no_std` targets) only ever keeps the first
+frame, since those targets typically have no allocator for a frame array; the compiler
+emits a warning when this happens.
+
 <Tabs syncKey="dev-language">
 <TabItem label="Rust" icon="seti:rust">
 In Rust, properties or struct fields of the image type are mapped to <LangRefLink lang="rust-slint" relpath="struct.Image">`slint::Image`</LangRefLink>.
@@ -43,6 +59,11 @@ By default, only PNG, JPEG, and SVG are supported.
 Enable the `image-default-formats` Cargo feature to support the other formats listed above,
 which comes at a cost of increased binary size and compilation time.
 This feature has no effect on the web, where the browser decodes images.
+
+Animated GIF, animated PNG and animated WebP playback is a separate, opt-in
+`animated-images` Cargo feature (independent of `image-default-formats`), since it
+pulls in additional decoder code and the per-item playback machinery. It has no
+effect on the web.
 :::
 </TabItem>
 <TabItem label="C++" icon="seti:cpp">

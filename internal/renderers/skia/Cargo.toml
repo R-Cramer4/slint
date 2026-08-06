@@ -31,7 +31,12 @@ wgpu-29 = ["i-slint-core/wgpu-29", "dep:wgpu-29", "dep:spin_on", "dep:ash", "dep
 unstable-wgpu-29 = ["i-slint-core/unstable-wgpu-29", "wgpu-29"]
 wgpu-30 = ["i-slint-core/wgpu-30", "dep:wgpu-30", "dep:spin_on", "dep:ash", "dep:windows-core", "dep:wgpu-hal-30"]
 unstable-wgpu-30 = ["i-slint-core/unstable-wgpu-30", "wgpu-30"]
-default = ["softbuffer"]
+# Like image-decoders/svg above, this crate always wants to be able to decode animated
+# images; it's a Cargo feature of its own (rather than an unconditional dependency
+# feature) only because this crate's own code has to gate its `ImageInner::AnimatedImage`
+# match arm on a feature that's declared in *this* crate's manifest.
+animated-images = ["i-slint-core/animated-images"]
+default = ["softbuffer", "animated-images"]
 
 [dependencies]
 i-slint-core = { workspace = true, features = ["default", "box-shadow-cache", "shared-parley", "image-decoders", "svg"] }

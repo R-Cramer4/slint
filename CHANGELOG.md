@@ -8,6 +8,10 @@ All notable changes to this project are documented in this file.
 
  - Added the `FlexboxLayout` element, which arranges its children in rows or columns and wraps them
    to the next line when they don't fit.
+ - Added support for animated GIF, animated PNG, and animated WebP images in the `Image` element,
+   including a new `running` property to pause and resume playback. Opt-in via the new
+   `animated-images` Cargo feature (independent of `image-default-formats`); not supported on the
+   web. (#2081)
 
 ## [1.17.1] - 2026-07-07
 

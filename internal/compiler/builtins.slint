@@ -385,6 +385,13 @@ component ImageItem inherits Empty {
     in property <ImageRendering> image-rendering;
 
     in property <angle> rotation-angle <=> transform-rotation;
+
+    /// Whether an animated image (GIF, animated PNG, or animated WebP) plays.
+    /// Setting it to `false` freezes the current frame; setting it back to `true`
+    /// resumes playback from that frame rather than restarting. Has no effect on
+    /// static images, or when the `animated-images` feature isn't enabled.
+    /// \default true
+    in property <bool> running: true;
 }
 
 /// ```slint imageAlt="image example" width="300" height="200"

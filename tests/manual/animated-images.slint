@@ -1,0 +1,74 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
+
+// Manual test for animated raster images (#2081). Run with a build that has the
+// `animated-images` Cargo feature enabled, e.g.:
+//   cargo run -p slint-viewer --features i-slint-backend-selector/renderer-software -- \
+//       --style fluent tests/manual/animated-images.slint
+// (swap the renderer feature for whichever backend you want to exercise; the
+// Cargo.toml default features don't include `animated-images`, so the viewer's
+// crate needs it enabled explicitly for this file to show anything moving.)
+//
+// What to check:
+//  - "Spinner" and "Spinner (paused)" show the exact same GIF, one playing, one
+//    frozen: this is the thing a single shared `AnimatedImage` (design's rejected
+//    Option A) can't express, so it doubles as a regression test for that decision.
+//  - "Bouncing ball" is a different size/frame-rate GIF, playing independently.
+//  - The "Toggle running" button pauses/resumes the middle spinner. Toggling
+//    back on should resume from the frozen frame, not restart from frame 0.
+//  - A static PNG/JPEG placed alongside these should keep rendering normally
+//    (the `running` property has no effect on non-animated sources).
+
+import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export component TestCase inherits Window {
+    title: "Animated images manual test";
+    preferred-width: 500px;
+    preferred-height: 320px;
+
+    VerticalBox {
+        Text {
+            text: "Two elements sharing one animated source, independently playing:";
+        }
+        HorizontalBox {
+            VerticalBox {
+                Text { text: "Spinner (playing)"; horizontal-alignment: center; }
+                Image {
+                    source: @image-url("images/spinner.gif");
+                    width: 64px;
+                    height: 64px;
+                }
+            }
+            VerticalBox {
+                Text { text: "Spinner (paused)"; horizontal-alignment: center; }
+                Image {
+                    source: @image-url("images/spinner.gif");
+                    width: 64px;
+                    height: 64px;
+                    running: false;
+                }
+            }
+            VerticalBox {
+                Text { text: "Spinner (toggle)"; horizontal-alignment: center; }
+                Image {
+                    source: @image-url("images/spinner.gif");
+                    width: 64px;
+                    height: 64px;
+                    running: toggle-switch.is-running;
+                }
+                toggle-switch := Button {
+                    text: toggle-switch.is-running ? "Pause" : "Resume";
+                    property <bool> is-running: true;
+                    clicked => { toggle-switch.is-running = !toggle-switch.is-running; }
+                }
+            }
+        }
+
+        Text { text: "A different animated source (different size and frame rate):"; }
+        Image {
+            source: @image-url("images/bouncing-ball.gif");
+            width: 160px;
+            height: 40px;
+        }
+    }
+}

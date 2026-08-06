@@ -37,6 +37,8 @@ pub(crate) enum ImageVariant {
     Full,
     /// Rasterized at a specific pixel size (SVG).
     Sized { width: u32, height: u32 },
+    /// A single frame of an animated image (GIF, animated PNG, animated WebP).
+    Frame { index: u32 },
     /// A cropped sub-rectangle used as repeating tile. The source image
     /// dimensions are part of the key because the crop coordinates are in
     /// image-data space, whose content depends on the rasterized size for

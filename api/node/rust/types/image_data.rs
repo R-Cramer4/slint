@@ -53,7 +53,7 @@ impl SlintImageData {
     #[napi(getter)]
     pub fn data(&self) -> Buffer {
         let image_inner: &ImageInner = (&self.inner).into();
-        if let Some(buffer) = image_inner.render_to_buffer(None) {
+        if let Some(buffer) = image_inner.render_to_buffer(0, None) {
             match buffer {
                 SharedImageBuffer::RGB8(buffer) => {
                     return Buffer::from(rgb_to_rgba(

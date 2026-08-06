@@ -134,6 +134,7 @@ impl<R: femtovg::Renderer + TextureImporter> Texture<R> {
         target_size_for_scalable_source: Option<euclid::Size2D<u32, PhysicalPx>>,
         scaling: ImageRendering,
         tiling: (ImageTiling, ImageTiling),
+        frame: u32,
     ) -> Option<Rc<Self>> {
         let image_flags = base_image_flags(scaling, tiling);
 
@@ -209,7 +210,7 @@ impl<R: femtovg::Renderer + TextureImporter> Texture<R> {
                     .unwrap()
             }
             _ => {
-                let buffer = image.render_to_buffer(target_size_for_scalable_source)?;
+                let buffer = image.render_to_buffer(frame, target_size_for_scalable_source)?;
                 let (image_source, flags) = image_buffer_to_image_source(&buffer);
                 canvas.borrow_mut().create_image(image_source, image_flags | flags).unwrap()
             }
@@ -231,6 +232,7 @@ pub struct TextureCacheKey {
     target_size_for_scalable_source: Option<euclid::Size2D<u32, PhysicalPx>>,
     gpu_image_flags: ImageRendering,
     gpu_image_tiling: (ImageTiling, ImageTiling),
+    frame: u32,
 }
 
 impl TextureCacheKey {
@@ -239,12 +241,14 @@ impl TextureCacheKey {
         target_size_for_scalable_source: Option<euclid::Size2D<u32, PhysicalPx>>,
         gpu_image_flags: ImageRendering,
         gpu_image_tiling: (ImageTiling, ImageTiling),
+        frame: u32,
     ) -> Option<Self> {
         ImageCacheKey::new(resource).map(|source_key| Self {
             source_key,
             target_size_for_scalable_source,
             gpu_image_flags,
             gpu_image_tiling,
+            frame,
         })
     }
 }

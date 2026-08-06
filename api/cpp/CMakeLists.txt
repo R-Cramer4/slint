@@ -144,6 +144,7 @@ define_cargo_dependent_feature(backend-linuxkms "Enable support for the backend 
 define_cargo_dependent_feature(backend-linuxkms-noseat "Enable support for the backend that renders a single window fullscreen on Linux" OFF "NOT SLINT_FEATURE_FREESTANDING")
 
 define_cargo_dependent_feature(gettext "Enable support of translations using gettext" OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(animated-images "Enable playback of animated GIF, animated PNG and animated WebP images in the Image element" OFF "NOT SLINT_FEATURE_FREESTANDING")
 define_cargo_dependent_feature(accessibility "Enable integration with operating system provided accessibility APIs" ON "NOT SLINT_FEATURE_FREESTANDING")
 define_cargo_dependent_feature(testing "Enable support for testing API (experimental)" ON "NOT SLINT_FEATURE_FREESTANDING")
 define_cargo_feature(experimental "Enable experimental features. (No backward compatibility guarantees)" OFF)

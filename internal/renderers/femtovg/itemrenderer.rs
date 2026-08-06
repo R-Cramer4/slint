@@ -833,6 +833,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             target_size_for_scalable_source,
             Default::default(),
             Default::default(),
+            0,
         )
         .and_then(|cache_key| {
             self.texture_cache.borrow_mut().lookup_image_in_cache_or_create(cache_key, || {
@@ -842,6 +843,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
                     target_size_for_scalable_source,
                     Default::default(),
                     Default::default(),
+                    0,
                 )
             })
         })
@@ -852,6 +854,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
                 target_size_for_scalable_source,
                 Default::default(),
                 Default::default(),
+                0,
             )
         }) else {
             return;
@@ -1336,12 +1339,14 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
                 };
 
                 let image_rendering = item.rendering();
+                let frame = item.current_frame();
 
                 TextureCacheKey::new(
                     image_inner,
                     target_size_for_scalable_source,
                     image_rendering,
                     tiling,
+                    frame,
                 )
                 .and_then(|cache_key| {
                     self.texture_cache.borrow_mut().lookup_image_in_cache_or_create(
@@ -1353,6 +1358,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
                                 target_size_for_scalable_source,
                                 image_rendering,
                                 tiling,
+                                frame,
                             )
                         },
                     )
@@ -1364,6 +1370,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
                         target_size_for_scalable_source,
                         image_rendering,
                         tiling,
+                        frame,
                     )
                 })
                 .map(ItemGraphicsCacheEntry::Texture)

@@ -14,6 +14,8 @@ use crate::{SharedString, SharedVector};
 use super::{IntRect, IntSize};
 use crate::items::{ImageFit, ImageHorizontalAlignment, ImageTiling, ImageVerticalAlignment};
 
+#[cfg(feature = "animated-images")]
+pub mod animated;
 #[cfg(any(feature = "image-decoders", all(target_arch = "wasm32", feature = "std")))]
 pub mod cache;
 #[cfg(target_arch = "wasm32")]
@@ -49,6 +51,12 @@ OpaqueImageVTable_static! {
 OpaqueImageVTable_static! {
     /// VTable for RC wrapped SVG helper struct.
     pub static NINE_SLICE_VT for NineSliceImage
+}
+
+#[cfg(feature = "animated-images")]
+OpaqueImageVTable_static! {
+    /// VTable for RC wrapped AnimatedImage helper struct.
+    pub static ANIMATED_IMAGE_VT for animated::AnimatedImage
 }
 
 /// SharedPixelBuffer is a container for storing image data as pixels. It is
@@ -348,6 +356,8 @@ impl ImageCacheKey {
             ImageInner::NineSlice(nine) => vtable::VRc::borrow(nine).cache_key(),
             #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
             ImageInner::WGPUTexture(..) => return None,
+            #[cfg(feature = "animated-images")]
+            ImageInner::AnimatedImage(animated) => animated.cache_key(),
         };
         if matches!(key, ImageCacheKey::Invalid) { None } else { Some(key) }
     }
@@ -436,10 +446,16 @@ pub enum ImageInner {
     NineSlice(vtable::VRc<OpaqueImageVTable, NineSliceImage>) = 7,
     #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
     WGPUTexture(WGPUTexture) = 8,
+    /// A decoded multi-frame raster image (GIF, animated PNG, or animated WebP).
+    #[cfg(feature = "animated-images")]
+    AnimatedImage(vtable::VRc<OpaqueImageVTable, animated::AnimatedImage>) = 9,
 }
 
 impl ImageInner {
     /// Return or render the image into a buffer
+    ///
+    /// `frame` selects which frame to return for an animated image; it is ignored by
+    /// every other variant. Out-of-range indices are clamped to the last frame.
     ///
     /// `target_size_for_scalable_source` is the size to use if the image is scalable.
     /// (when unspecified, will default to the intrinsic size of the image)
@@ -447,6 +463,7 @@ impl ImageInner {
     /// Returns None if the image can't be rendered in a buffer or if the image is empty
     pub fn render_to_buffer(
         &self,
+        frame: u32,
         _target_size_for_scalable_source: Option<euclid::Size2D<u32, PhysicalPx>>,
     ) -> Option<SharedImageBuffer> {
         match self {
@@ -521,7 +538,9 @@ impl ImageInner {
                 }
                 Some(SharedImageBuffer::RGBA8Premultiplied(buffer))
             }
-            ImageInner::NineSlice(nine) => nine.0.render_to_buffer(None),
+            ImageInner::NineSlice(nine) => nine.0.render_to_buffer(frame, None),
+            #[cfg(feature = "animated-images")]
+            ImageInner::AnimatedImage(animated) => Some(animated.frame(frame as usize)),
             _ => None,
         }
     }
@@ -553,6 +572,8 @@ impl ImageInner {
             ImageInner::NineSlice(nine) => nine.0.size(),
             #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
             ImageInner::WGPUTexture(texture) => texture.size(),
+            #[cfg(feature = "animated-images")]
+            ImageInner::AnimatedImage(animated) => animated.size(),
         }
     }
 
@@ -612,6 +633,19 @@ impl ImageInner {
             let format = std::str::from_utf8(format.as_slice())
                 .ok()
                 .and_then(image::ImageFormat::from_extension);
+
+            #[cfg(feature = "animated-images")]
+            {
+                let format = format.or_else(|| image::guess_format(data.as_slice()).ok());
+                if let Some(inner) = animated::try_load_animated(
+                    std::io::Cursor::new(data.as_slice()),
+                    format,
+                    cache_key.clone(),
+                ) {
+                    return Some(inner);
+                }
+            }
+
             let maybe_image = if let Some(format) = format {
                 image::load_from_memory_with_format(data.as_slice(), format)
             } else {
@@ -676,6 +710,8 @@ impl PartialEq for ImageInner {
             #[cfg(not(target_arch = "wasm32"))]
             (Self::BorrowedOpenGLTexture(l0), Self::BorrowedOpenGLTexture(r0)) => l0 == r0,
             (Self::NineSlice(l), Self::NineSlice(r)) => l.0 == r.0 && l.1 == r.1,
+            #[cfg(feature = "animated-images")]
+            (Self::AnimatedImage(l0), Self::AnimatedImage(r0)) => vtable::VRc::ptr_eq(l0, r0),
             _ => false,
         }
     }
@@ -850,7 +886,7 @@ impl Image {
     /// Returns the pixel buffer for the Image if available in RGB format without alpha.
     /// Returns None if the pixels cannot be obtained, for example when the image was created from borrowed OpenGL textures.
     pub fn to_rgb8(&self) -> Option<SharedPixelBuffer<Rgb8Pixel>> {
-        self.0.render_to_buffer(None).and_then(|image| match image {
+        self.0.render_to_buffer(0, None).and_then(|image| match image {
             SharedImageBuffer::RGB8(buffer) => Some(buffer),
             _ => None,
         })
@@ -858,6 +894,7 @@ impl Image {
 
     /// Returns the pixel buffer for the Image if available in RGBA format.
     /// Returns None if the pixels cannot be obtained, for example when the image was created from borrowed OpenGL textures.
+    /// For an animated image (GIF, animated PNG, animated WebP), this always returns the first frame.
     pub fn to_rgba8(&self) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
         self.render_to_rgba8(None)
     }
@@ -876,7 +913,7 @@ impl Image {
         &self,
         target_size: Option<euclid::Size2D<u32, PhysicalPx>>,
     ) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-        self.0.render_to_buffer(target_size).map(|image| match image {
+        self.0.render_to_buffer(0, target_size).map(|image| match image {
             SharedImageBuffer::RGB8(buffer) => SharedPixelBuffer::<Rgba8Pixel> {
                 width: buffer.width,
                 height: buffer.height,
@@ -895,7 +932,7 @@ impl Image {
     /// to the red, green, and blue channels.
     /// Returns None if the pixels cannot be obtained, for example when the image was created from borrowed OpenGL textures.
     pub fn to_rgba8_premultiplied(&self) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-        self.0.render_to_buffer(None).map(|image| match image {
+        self.0.render_to_buffer(0, None).map(|image| match image {
             SharedImageBuffer::RGB8(buffer) => SharedPixelBuffer::<Rgba8Pixel> {
                 width: buffer.width,
                 height: buffer.height,

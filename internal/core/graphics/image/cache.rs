@@ -32,6 +32,8 @@ impl clru::WeightScale<ImageCacheKey, ImageInner> for ImageWeightInBytes {
             ImageInner::NineSlice(nine) => self.weight(_key, &nine.0),
             #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
             ImageInner::WGPUTexture(..) => 0, // The texture is imported from the application and will never reside in our cache.
+            #[cfg(feature = "animated-images")]
+            ImageInner::AnimatedImage(animated) => animated.weight_in_bytes(),
         }
     }
 }
@@ -97,6 +99,25 @@ impl ImageCache {
                         Some,
                     )?,
                 )));
+            }
+
+            #[cfg(feature = "animated-images")]
+            {
+                let format = std::path::Path::new(path.as_str())
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .and_then(image::ImageFormat::from_extension);
+                if let Some(format) = format {
+                    if let Ok(file) = std::fs::File::open(std::path::Path::new(path.as_str())) {
+                        if let Some(inner) = super::animated::try_load_animated(
+                            std::io::BufReader::new(file),
+                            Some(format),
+                            cache_key.clone(),
+                        ) {
+                            return Some(inner);
+                        }
+                    }
+                }
             }
 
             image::open(std::path::Path::new(&path.as_str())).map_or_else(
@@ -211,6 +232,87 @@ mod tests {
                 .as_slice()
                 .iter()
                 .all(|pixel| *pixel == Rgba8Pixel { r: 0, g: 255, b: 0, a: 255 })
+        );
+    }
+
+    #[cfg(feature = "animated-images")]
+    fn encode_gif(path: &std::path::Path, frames: alloc::vec::Vec<image::Frame>) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        encoder.set_repeat(image::codecs::gif::Repeat::Infinite).unwrap();
+        encoder.encode_frames(frames.into_iter()).unwrap();
+    }
+
+    #[cfg(feature = "animated-images")]
+    #[test]
+    fn test_animated_gif_decodes_as_animated_image() {
+        use image::{Delay, Frame, Rgba, RgbaImage};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let test_path = temp_dir.path().join("anim.gif");
+
+        let frames = alloc::vec![
+            Frame::from_parts(
+                RgbaImage::from_pixel(4, 4, Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(100, 1),
+            ),
+            Frame::from_parts(
+                RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(100, 1),
+            ),
+        ];
+        encode_gif(&test_path, frames);
+
+        let image = crate::graphics::Image::load_from_path(&test_path).unwrap();
+        let inner: &crate::graphics::ImageInner = (&image).into();
+        match inner {
+            crate::graphics::ImageInner::AnimatedImage(animated) => {
+                assert_eq!(animated.frame_count(), 2);
+            }
+            other => panic!("expected AnimatedImage, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "animated-images")]
+    #[test]
+    fn test_single_frame_gif_decodes_as_embedded_image() {
+        use image::{Delay, Frame, Rgba, RgbaImage};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let test_path = temp_dir.path().join("static.gif");
+
+        let frames = alloc::vec![Frame::from_parts(
+            RgbaImage::from_pixel(4, 4, Rgba([0, 0, 255, 255])),
+            0,
+            0,
+            Delay::from_numer_denom_ms(100, 1),
+        )];
+        encode_gif(&test_path, frames);
+
+        let image = crate::graphics::Image::load_from_path(&test_path).unwrap();
+        let inner: &crate::graphics::ImageInner = (&image).into();
+        assert!(
+            matches!(inner, crate::graphics::ImageInner::EmbeddedImage { .. }),
+            "expected EmbeddedImage, got {inner:?}"
+        );
+    }
+
+    #[cfg(feature = "animated-images")]
+    #[test]
+    fn test_non_apng_png_decodes_as_embedded_image() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let test_path = temp_dir.path().join("plain.png");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30])).save(&test_path).unwrap();
+
+        let image = crate::graphics::Image::load_from_path(&test_path).unwrap();
+        let inner: &crate::graphics::ImageInner = (&image).into();
+        assert!(
+            matches!(inner, crate::graphics::ImageInner::EmbeddedImage { .. }),
+            "expected EmbeddedImage, got {inner:?}"
         );
     }
 }

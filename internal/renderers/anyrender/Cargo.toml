@@ -17,6 +17,14 @@ publish = false
 [lib]
 path = "lib.rs"
 
+[features]
+# Like image-decoders/svg below, this crate always wants to be able to decode animated
+# images; it's a Cargo feature of its own (rather than an unconditional dependency
+# feature) only because this crate's own code has to gate its `ImageInner::AnimatedImage`
+# match arm on a feature that's declared in *this* crate's manifest.
+animated-images = ["i-slint-core/animated-images"]
+default = ["animated-images"]
+
 [dependencies]
 i-slint-core = { workspace = true, features = ["default", "shared-fontique", "shared-parley", "image-decoders", "svg"] }
 

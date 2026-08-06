@@ -346,6 +346,13 @@ pub trait RenderImage {
     fn colorize(self: Pin<&Self>) -> Brush;
     fn alignment(self: Pin<&Self>) -> (ImageHorizontalAlignment, ImageVerticalAlignment);
     fn tiling(self: Pin<&Self>) -> (ImageTiling, ImageTiling);
+    /// The frame to display, for an animated `source` (GIF, animated PNG, animated
+    /// WebP). Ignored by non-animated sources. Reading this inside a backend's
+    /// tracked rendering closure is what makes per-frame repaints automatic; see
+    /// `ImageItem`/`ClippedImage` for the only overriding implementations.
+    fn current_frame(self: Pin<&Self>) -> u32 {
+        0
+    }
 }
 
 /// Trait for an item has font properties

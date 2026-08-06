@@ -353,6 +353,7 @@ impl<'a> SkiaItemRenderer<'a> {
             let image = item.source();
             super::cached_image::as_skia_image(
                 image,
+                item.current_frame(),
                 &|| item.target_size(),
                 if tiling != Default::default() { ImageFit::Preserve } else { item.image_fit() },
                 self.scale_factor,
@@ -957,6 +958,7 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
     fn draw_image_direct(&mut self, image: i_slint_core::graphics::Image) {
         let skia_image = super::cached_image::as_skia_image(
             image.clone(),
+            0,
             &|| LogicalSize::from_untyped(image.size().cast()),
             ImageFit::Fill,
             self.scale_factor,

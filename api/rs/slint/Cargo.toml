@@ -102,6 +102,12 @@ raw-window-handle-06 = ["dep:raw-window-handle-06", "i-slint-backend-selector/ra
 ## This feature has no effect on the web, where the browser decodes images.
 image-default-formats = ["i-slint-core/image-default-formats"]
 
+## Enable playback of animated GIF, animated PNG and animated WebP images in the
+## `Image` element (the `running` property, and per-frame decoding/timing).
+## Independent of `image-default-formats`. Not supported on the web, where the
+## browser decodes images and animated sources show a single frame.
+animated-images = ["i-slint-core/animated-images"]
+
 ## Enable the live preview feature
 ##
 ## Enable this feature to reload the .slint files at runtime and reload it whenever the files are modified on disk.

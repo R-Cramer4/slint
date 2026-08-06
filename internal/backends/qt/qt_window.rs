@@ -1211,7 +1211,7 @@ impl ItemRenderer for QtItemRenderer<'_> {
         // Rasterize scalable sources at scale_factor so SVGs are crisp on high-DPI displays
         // (matches femtovg/skia draw_image_direct).
         let pixmap_size = image_inner.is_svg().then(|| target_size.cast());
-        let Some(pixmap) = image_to_pixmap(image_inner, pixmap_size) else { return };
+        let Some(pixmap) = image_to_pixmap(image_inner, 0, pixmap_size) else { return };
 
         let pixmap_size = pixmap.size();
         let source_rect = qttypes::QRectF {
@@ -1638,9 +1638,10 @@ fn shared_image_buffer_to_pixmap(buffer: &SharedImageBuffer) -> Option<qttypes::
 
 pub(crate) fn image_to_pixmap(
     image: &ImageInner,
+    frame: u32,
     source_size: Option<euclid::Size2D<u32, PhysicalPx>>,
 ) -> Option<qttypes::QPixmap> {
-    shared_image_buffer_to_pixmap(&image.render_to_buffer(source_size)?)
+    shared_image_buffer_to_pixmap(&image.render_to_buffer(frame, source_size)?)
 }
 
 /// Converts a Qt image to a Slint `SharedPixelBuffer<Rgba8Pixel>`, repacking each
@@ -1720,7 +1721,7 @@ impl QtItemRenderer<'_> {
                 None
             };
 
-            image_to_pixmap(source, source_size).map_or_else(
+            image_to_pixmap(source, image.current_frame(), source_size).map_or_else(
                 Default::default,
                 |mut pixmap: qttypes::QPixmap| {
                     let colorize = image.colorize();
@@ -2417,7 +2418,7 @@ impl WindowAdapter for QtWindow {
                 let icon_image_cache_key = ImageCacheKey::new(r);
                 if *self.window_icon_cache_key.borrow() != icon_image_cache_key {
                     *self.window_icon_cache_key.borrow_mut() = icon_image_cache_key;
-                    image_to_pixmap(r, None)
+                    image_to_pixmap(r, 0, None)
                 } else {
                     None
                 }
@@ -2528,7 +2529,7 @@ impl WindowAdapterInternal for QtWindow {
             .data()
             .image()
             .ok()
-            .and_then(|img| image_to_pixmap(<&ImageInner>::from(&img), None))
+            .and_then(|img| image_to_pixmap(<&ImageInner>::from(&img), 0, None))
             .unwrap_or_default();
 
         let files: qttypes::QStringList = request
@@ -2540,7 +2541,7 @@ impl WindowAdapterInternal for QtWindow {
             .unwrap_or_default();
 
         let drag_pixmap =
-            image_to_pixmap(<&ImageInner>::from(request.drag_image()), None).unwrap_or_default();
+            image_to_pixmap(<&ImageInner>::from(request.drag_image()), 0, None).unwrap_or_default();
         let offset = request.drag_image_offset();
         let offset_x = offset.x;
         let offset_y = offset.y;
@@ -2665,7 +2666,7 @@ impl WindowAdapterInternal for QtWindow {
                     * ScaleFactor::new(self.window.scale_factor());
                 let pixmap_size = image_inner.is_svg().then(|| target_size.cast());
                 let pixmap: qttypes::QPixmap =
-                    image_to_pixmap(image_inner, pixmap_size).unwrap_or_default();
+                    image_to_pixmap(image_inner, 0, pixmap_size).unwrap_or_default();
                 // Map the hotspot into the rendered pixmap and clamp it inside (QCursor would
                 // otherwise center a negative).
                 let rendered = pixmap.size();

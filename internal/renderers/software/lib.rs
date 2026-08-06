@@ -2275,6 +2275,7 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
             tiled,
         }: i_slint_core::graphics::FitResult,
         colorize: Color,
+        frame: u32,
     ) {
         let global_alpha_u16 = (self.current_state.alpha * 255.) as u16;
         let offset =
@@ -2412,7 +2413,7 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
                 } else {
                     target_rect.size.cast()
                 };
-                if let Some(buffer) = image_inner.render_to_buffer(Some(svg_target_size)) {
+                if let Some(buffer) = image_inner.render_to_buffer(frame, Some(svg_target_size)) {
                     let buf_size = buffer.size().cast::<f32>();
 
                     let alpha = if colorize.alpha() > 0 {
@@ -2774,6 +2775,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
             let source = image.source();
 
             let image_inner: &ImageInner = (&source).into();
+            let frame = image.current_frame();
             if let ImageInner::NineSlice(nine) = image_inner {
                 let colorize = image.colorize().color();
                 let source_size = source.size();
@@ -2785,7 +2787,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                     image.alignment(),
                     image.tiling(),
                 ) {
-                    self.draw_image_impl(&nine.0, fit, colorize);
+                    self.draw_image_impl(&nine.0, fit, colorize, frame);
                 }
                 return;
             }
@@ -2807,7 +2809,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 image.alignment(),
                 image.tiling(),
             );
-            self.draw_image_impl(image_inner, fit, image.colorize().color());
+            self.draw_image_impl(image_inner, fit, image.colorize().color(), frame);
         }
     }
 
@@ -3361,7 +3363,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
             Default::default(),
             Default::default(),
         );
-        self.draw_image_impl(image_inner, fit, i_slint_core::Color::default());
+        self.draw_image_impl(image_inner, fit, i_slint_core::Color::default(), 0);
     }
 
     fn window(&self) -> &i_slint_core::window::WindowInner {
