@@ -984,6 +984,30 @@ impl WinitWindowAdapter {
                 html_canvas.set_width(physical_size.width);
                 html_canvas.set_height(physical_size.height);
             }
+
+            // On macOS, the GL context's `update()` call above can make AppKit re-enter
+            // and call `drawRect:` from within this `Resized` dispatch. Winit then drops
+            // the redraw `request_redraw()` would arm, losing the settled-size frame. The
+            // race isn't confined to the drag's last tick, so draw synchronously on every
+            // resize rather than trying to guess which ticks need it.
+            #[cfg(target_os = "macos")]
+            {
+                self.draw()?;
+
+                // AppKit still marks the view dirty and would otherwise call `drawRect:` again
+                // right after for the same tick; clear that flag since we just drew, so it
+                // doesn't repaint the same frame a second time.
+                use raw_window_handle::HasWindowHandle;
+                if let Some(winit_window) = self.winit_window_or_none.borrow().as_window()
+                    && let Ok(handle) = winit_window.window_handle()
+                    && let raw_window_handle::RawWindowHandle::AppKit(
+                        raw_window_handle::AppKitWindowHandle { ns_view, .. },
+                    ) = handle.as_raw()
+                {
+                    let ns_view: &objc2_app_kit::NSView = unsafe { ns_view.cast().as_ref() };
+                    ns_view.setNeedsDisplay(false);
+                }
+            }
         }
         Ok(())
     }
