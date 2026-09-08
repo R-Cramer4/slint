@@ -97,6 +97,26 @@ pub fn send_keyboard_key_text(
     })
 }
 
+#[cfg(any(feature = "internal", feature = "ffi"))]
+/// Simulate the windowing system reporting an authoritative Shift/Ctrl/Alt/Meta snapshot
+/// independently of any key event, the way winit's `ModifiersChanged` does. Lets a test
+/// reproduce a backend correcting Slint's inferred modifier state (see `InternalEvent::ModifiersChanged`).
+pub fn send_authoritative_modifiers(
+    shift: bool,
+    control: bool,
+    alt: bool,
+    meta: bool,
+    window_adapter: &i_slint_core::window::WindowAdapterRc,
+) {
+    use i_slint_core::platform::{InternalEvent, WindowEvent};
+
+    let modifiers = i_slint_core::input::KeyboardModifiers::new(shift, control, alt, meta);
+
+    window_adapter
+        .window()
+        .dispatch_event(WindowEvent::internal(InternalEvent::ModifiersChanged(modifiers)));
+}
+
 #[cfg(feature = "ffi")]
 /// Dispatch each character in the string as a separate key event.
 pub fn send_keyboard_char(

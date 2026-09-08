@@ -13,7 +13,9 @@ use i_slint_core::SharedString;
 use i_slint_core::api::{
     LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PlatformError, Window,
 };
-use i_slint_core::input::{InternalKeyEvent, KeyEvent, KeyEventType, TouchPhase};
+use i_slint_core::input::{
+    InternalKeyEvent, KeyEvent, KeyEventType, KeyboardModifiers, TouchPhase,
+};
 use i_slint_core::lengths::PhysicalEdges;
 use i_slint_core::platform::{
     InternalEvent, Key, PointerEventButton, WindowAdapter, WindowEvent, WindowEventDispatchResult,
@@ -692,14 +694,30 @@ fn button_for_event(
 fn map_key_event(key_event: &android_activity::input::KeyEvent) -> Option<WindowEvent> {
     let text = map_key_code(key_event.key_code())?;
     let repeat = key_event.repeat_count() > 0;
-    match key_event.action() {
-        KeyAction::Down if repeat => Some(WindowEvent::KeyPressRepeated { text }),
-        KeyAction::Down => Some(WindowEvent::KeyPressed { text }),
-        KeyAction::Up => Some(WindowEvent::KeyReleased { text }),
-        KeyAction::Multiple if repeat => Some(WindowEvent::KeyPressRepeated { text }),
-        KeyAction::Multiple => Some(WindowEvent::KeyPressed { text }),
-        _ => None,
-    }
+    let event_type = match key_event.action() {
+        KeyAction::Down | KeyAction::Multiple => KeyEventType::KeyPressed,
+        KeyAction::Up => KeyEventType::KeyReleased,
+        _ => return None,
+    };
+
+    let mut event = KeyEvent::default();
+    event.text = text;
+    event.repeat = repeat;
+
+    let meta_state = key_event.meta_state();
+    let modifiers = KeyboardModifiers::new(
+        meta_state.shift_on(),
+        meta_state.ctrl_on(),
+        meta_state.alt_on(),
+        meta_state.meta_on(),
+    );
+
+    Some(WindowEvent::internal(InternalKeyEvent {
+        key_event: event,
+        event_type,
+        authoritative_modifiers: Some(modifiers),
+        ..Default::default()
+    }))
 }
 
 fn map_key_code(code: android_activity::input::Keycode) -> Option<SharedString> {

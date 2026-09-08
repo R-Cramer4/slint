@@ -1,0 +1,84 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
+
+export global Api {
+    pure callback make-data() -> data-transfer;
+}
+
+export component TestCase inherits Window {
+    pure callback make-data <=> Api.make-data;
+
+    width: 100px;
+    height: 200px;
+    out property <DragAction> current-action <=> dropper.current-action;
+
+    VerticalLayout {
+        Rectangle {
+            background: red;
+            DragArea {
+                data: Api.make-data();
+                allow-copy: true;
+                allow-move: true;
+                allow-link: true;
+            }
+        }
+        Rectangle {
+            background: blue;
+            dropper := DropArea {
+                can-drop(event) => event.proposed-action;
+                dropped(event) => event.proposed-action;
+            }
+        }
+    }
+}
+
+/*
+```rust
+use slint::{platform::WindowEvent, LogicalPosition, platform::PointerEventButton};
+use slint::private_unstable_api::re_exports::{DragAction, Key};
+
+let instance = TestCase::new().unwrap();
+instance.on_make_data(|| slint::SharedString::from("payload").into());
+
+instance.window().dispatch_event(WindowEvent::PointerPressed { position: LogicalPosition::new(20.0, 25.0), button: PointerEventButton::Left });
+slint_testing::mock_elapsed_time(20);
+instance.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(21.0, 40.0) });
+slint_testing::mock_elapsed_time(20);
+instance.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(22.0, 120.0) });
+slint_testing::mock_elapsed_time(20);
+// No modifiers -> first allowed action (move).
+assert_eq!(instance.get_current_action(), DragAction::Move);
+
+// Hold Control for the rest of the drag; it isn't affected by the bug below.
+instance.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+slint_testing::send_authoritative_modifiers(&instance, false, true, false, false);
+assert_eq!(instance.get_current_action(), DragAction::Copy);
+
+// Press Shift; the windowing system's own modifier tracking agrees -> Ctrl+Shift = Link.
+instance.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Shift.into() });
+slint_testing::send_authoritative_modifiers(&instance, true, true, false, false);
+assert_eq!(instance.get_current_action(), DragAction::Link);
+
+// Release the physical Shift key, but (as with GNOME's "Both Shift keys toggle Caps Lock"
+// option) the layout reports the release as a Caps Lock key instead, which Slint's own
+// press/release text matching can't recognize as the Shift release: the proposed action
+// stays stuck on Link.
+instance.window().dispatch_event(WindowEvent::KeyReleased { text: Key::CapsLock.into() });
+assert_eq!(instance.get_current_action(), DragAction::Link);
+
+// The windowing system's own modifier tracking isn't confused by the same key text mismatch,
+// so it reports Shift as no longer held (Ctrl still is). Slint corrects its own state as soon
+// as this arrives and resyncs the in-flight drag without needing another key or pointer event,
+// so the proposed action immediately drops back to Copy (#7273).
+slint_testing::send_authoritative_modifiers(&instance, false, true, false, false);
+assert_eq!(instance.get_current_action(), DragAction::Copy);
+
+instance.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+slint_testing::send_authoritative_modifiers(&instance, false, false, false, false);
+assert_eq!(instance.get_current_action(), DragAction::Move);
+
+instance.window().dispatch_event(WindowEvent::PointerReleased { position: LogicalPosition::new(22.0, 120.0), button: PointerEventButton::Left });
+slint_testing::mock_elapsed_time(20);
+assert_eq!(instance.get_current_action(), DragAction::None);
+```
+*/

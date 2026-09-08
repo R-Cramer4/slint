@@ -396,7 +396,7 @@ pub mod key_codes {
 
 /// Internal struct to maintain the pressed/released state of the keys that
 /// map to keyboard modifiers.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub(crate) struct InternalKeyboardModifierState {
     left_alt: bool,
     right_alt: bool,
@@ -433,6 +433,42 @@ impl InternalKeyboardModifierState {
         }
 
         Some(self)
+    }
+
+    /// Corrects the tracked left/right modifier flags against an authoritative aggregate
+    /// snapshot reported directly by the windowing system.
+    ///
+    /// Slint otherwise infers modifier state by matching each modifier key's press against its
+    /// own release by text, which some keyboard layouts break: they report a modifier key's
+    /// release with different text than its press (e.g. GNOME's "Both Shift keys toggle Caps
+    /// Lock" turns a Shift release into a Caps Lock release), leaving the inferred state stuck
+    /// (#7273).
+    ///
+    /// Since the snapshot doesn't distinguish left from right, a correction collapses onto the
+    /// left variant and clears the right one; this only touches modifiers where the aggregate
+    /// disagrees with what's currently tracked, so a still-consistent left/right split is left
+    /// alone.
+    pub(crate) fn reconcile(mut self, authoritative: KeyboardModifiers) -> Self {
+        if authoritative.shift != self.shift() {
+            self.left_shift = authoritative.shift;
+            self.right_shift = false;
+        }
+        if authoritative.control != self.control() {
+            self.left_control = authoritative.control;
+            self.right_control = false;
+        }
+        if authoritative.alt != self.alt() {
+            self.left_alt = authoritative.alt;
+            self.right_alt = false;
+            if !authoritative.alt {
+                self.altgr = false;
+            }
+        }
+        if authoritative.meta != self.meta() {
+            self.left_meta = authoritative.meta;
+            self.right_meta = false;
+        }
+        self
     }
 
     pub fn shift(&self) -> bool {
@@ -510,6 +546,16 @@ impl InternalKeyboardModifierState {
         }
 
         KeyboardModifiers { alt, control, meta: self.meta(), shift: self.shift() }
+    }
+}
+
+impl KeyboardModifiers {
+    /// Constructs a modifier snapshot from individual Shift/Ctrl/Alt/Meta flags.
+    ///
+    /// `KeyboardModifiers` is `#[non_exhaustive]`, so backends outside this crate can't use
+    /// struct-literal syntax; this is the constructor they call instead.
+    pub fn new(shift: bool, control: bool, alt: bool, meta: bool) -> Self {
+        Self { shift, control, alt, meta }
     }
 }
 
@@ -1122,6 +1168,13 @@ pub struct InternalKeyEvent {
     pub cursor_position: Option<i32>,
     /// The anchor position, when None, the cursor is put after the text that was just inserted
     pub anchor_position: Option<i32>,
+    /// The aggregate Shift/Ctrl/Alt/Meta state as reported directly by the windowing system for
+    /// this event, if the backend can supply one.
+    ///
+    /// Slint otherwise infers modifier state from each key's press/release pairing, which some
+    /// keyboard layouts defeat; see [`InternalKeyboardModifierState::reconcile`] for how this
+    /// snapshot corrects that drift (#7273).
+    pub authoritative_modifiers: Option<KeyboardModifiers>,
 }
 
 impl InternalKeyEvent {

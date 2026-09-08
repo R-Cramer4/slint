@@ -777,6 +777,10 @@ impl Window {
                 crate::platform::InternalEvent::Touch { id, position, phase } => {
                     self.0.process_touch_input(id, position, phase).into()
                 }
+                crate::platform::InternalEvent::ModifiersChanged(modifiers) => {
+                    self.0.synchronize_modifiers(modifiers);
+                    WindowEventDispatchResult::Accepted
+                }
             },
         };
         if let Some(event_for_hook) = event_for_hook

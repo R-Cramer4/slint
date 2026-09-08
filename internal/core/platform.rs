@@ -589,6 +589,9 @@ pub enum InternalEvent {
         /// Whether the finger was put down, moved, lifted or cancelled.
         phase: crate::input::TouchPhase,
     },
+    /// An aggregate Shift/Ctrl/Alt/Meta snapshot that the windowing system reported directly,
+    /// independently of any key event (see `WindowInner::synchronize_modifiers`, and #7273).
+    ModifiersChanged(crate::input::KeyboardModifiers),
 }
 
 impl From<crate::input::BackendMouseEvent> for InternalEvent {
@@ -656,6 +659,8 @@ impl InternalEvent {
             // There's no public touch event, and the pointer events the runtime synthesizes from
             // a touch point carry a finger id that `WindowEvent` can't express.
             Self::Touch { .. } => None,
+            // There's no public modifiers-only event.
+            Self::ModifiersChanged(_) => None,
         }
     }
 
@@ -669,6 +674,7 @@ impl InternalEvent {
             Self::Touch { position, .. } => {
                 Some(crate::lengths::logical_position_to_api(*position))
             }
+            Self::ModifiersChanged(_) => None,
         }
     }
 }

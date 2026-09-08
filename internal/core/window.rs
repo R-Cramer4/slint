@@ -12,8 +12,9 @@ use crate::api::{
 use crate::cursor::MouseCursorInner;
 use crate::input::{
     BackendDragEvent, ClickState, DragData, FocusEvent, FocusReason, InternalKeyEvent,
-    KeyEventResult, KeyEventType, Keys, MouseEvent, MouseInputState, PointerEventButton,
-    TextCursorBlinker, TouchPhase, TouchState, key_codes,
+    InternalKeyboardModifierState, KeyEventResult, KeyEventType, KeyboardModifiers, Keys,
+    MouseEvent, MouseInputState, PointerEventButton, TextCursorBlinker, TouchPhase, TouchState,
+    key_codes,
 };
 use crate::item_tree::{
     ItemRc, ItemTreeRc, ItemTreeRef, ItemTreeRefPin, ItemTreeVTable, ItemTreeWeak, ItemWeak,
@@ -1182,6 +1183,39 @@ impl WindowInner {
         ));
     }
 
+    /// Applies `updated` to the tracked keyboard modifier state if it differs from the current
+    /// value, and resyncs an in-flight drag so the new state flows into `event.proposed-action`
+    /// and the target's `can-drop` reruns, letting the user change copy/move/link with Ctrl/Shift
+    /// without having to move the mouse first.
+    fn apply_modifier_state(&self, updated: InternalKeyboardModifierState) {
+        if updated == self.context().0.modifiers.get() {
+            return;
+        }
+        self.context().0.modifiers.set(updated);
+
+        let drag_pos = {
+            let state = self.mouse_input_state.take();
+            let pos = state.drag_data.as_ref().map(|d| d.event.position);
+            self.mouse_input_state.replace(state);
+            pos
+        };
+        if let Some(pos) = drag_pos {
+            self.process_mouse_input(MouseEvent::Moved {
+                position: crate::lengths::logical_point_from_api(pos),
+                touch_finger_id: 0,
+            });
+        }
+    }
+
+    /// Corrects the tracked keyboard modifier state against an aggregate Shift/Ctrl/Alt/Meta
+    /// snapshot the windowing system reports independently of any key event (e.g. winit's
+    /// `ModifiersChanged`), instead of waiting to reconcile it lazily on the next key event
+    /// (see `InternalKeyEvent::authoritative_modifiers` for why this is needed).
+    pub(crate) fn synchronize_modifiers(&self, authoritative: KeyboardModifiers) {
+        let updated = self.context().0.modifiers.get().reconcile(authoritative);
+        self.apply_modifier_state(updated);
+    }
+
     /// Receive a key event and pass it to the items of the component to
     /// change their state.
     ///
@@ -1207,30 +1241,18 @@ impl WindowInner {
             }
         }
 
-        if let Some(updated_modifier) = self.context().0.modifiers.get().state_update(
-            internal_key_event.event_type == KeyEventType::KeyPressed,
-            &internal_key_event.key_event.text,
-        ) {
-            // Updates the key modifiers depending on the key code and pressed state.
-            self.context().0.modifiers.set(updated_modifier);
-
-            // If a drag is in flight, synthesize a Moved at the last drag position so
-            // the new modifier state flows into `event.proposed-action` and the target's
-            // `can-drop` re-runs — letting the user change copy/move/link with Ctrl/Shift
-            // without having to move the mouse first.
-            let drag_pos = {
-                let state = self.mouse_input_state.take();
-                let pos = state.drag_data.as_ref().map(|d| d.event.position);
-                self.mouse_input_state.replace(state);
-                pos
-            };
-            if let Some(pos) = drag_pos {
-                self.process_mouse_input(MouseEvent::Moved {
-                    position: crate::lengths::logical_point_from_api(pos),
-                    touch_finger_id: 0,
-                });
-            }
+        // Updates the key modifiers depending on the key code and pressed state.
+        let current_modifiers = self.context().0.modifiers.get();
+        let mut modifiers = current_modifiers
+            .state_update(
+                internal_key_event.event_type == KeyEventType::KeyPressed,
+                &internal_key_event.key_event.text,
+            )
+            .unwrap_or(current_modifiers);
+        if let Some(authoritative) = internal_key_event.authoritative_modifiers {
+            modifiers = modifiers.reconcile(authoritative);
         }
+        self.apply_modifier_state(modifiers);
 
         internal_key_event.key_event.modifiers =
             self.context().0.modifiers.get().modifiers_for(&internal_key_event);

@@ -19,6 +19,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use i_slint_core::api::LogicalPosition;
+use i_slint_core::input::{InternalKeyEvent, KeyEvent, KeyEventType, KeyboardModifiers};
 use i_slint_core::lengths::logical_point_from_api;
 use i_slint_core::platform::{InternalEvent, PlatformError, PointerEventButton, WindowEvent};
 use i_slint_core::window::WindowAdapter;
@@ -343,6 +344,10 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                         .mod_name_is_active(xkb::MOD_NAME_CTRL, xkb::STATE_MODS_EFFECTIVE);
                     let alt = xkb_key_state
                         .mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
+                    let shift = xkb_key_state
+                        .mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
+                    let meta = xkb_key_state
+                        .mod_name_is_active(xkb::MOD_NAME_LOGO, xkb::STATE_MODS_EFFECTIVE);
 
                     if state == KeyState::Pressed {
                         //eprintln!(
@@ -365,10 +370,21 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                     }
 
                     if let Some(text) = map_key_sym(sym) {
-                        let event = match state {
-                            KeyState::Pressed => WindowEvent::KeyPressed { text },
-                            KeyState::Released => WindowEvent::KeyReleased { text },
+                        let event_type = match state {
+                            KeyState::Pressed => KeyEventType::KeyPressed,
+                            KeyState::Released => KeyEventType::KeyReleased,
                         };
+                        let mut key_event = KeyEvent::default();
+                        key_event.text = text;
+
+                        let modifiers = KeyboardModifiers::new(shift, control, alt, meta);
+
+                        let event = WindowEvent::internal(InternalKeyEvent {
+                            key_event,
+                            event_type,
+                            authoritative_modifiers: Some(modifiers),
+                            ..Default::default()
+                        });
                         window.dispatch_event_with_result(event).map_err(Self::Error::other)?;
                     }
                 }

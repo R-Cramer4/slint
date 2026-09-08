@@ -730,11 +730,12 @@ pub fn eval_expression(ctx: &mut EvalContext, expression: &Expression) -> Value 
         Expression::NumberLiteral(n) => Value::Number(*n),
         Expression::BoolLiteral(b) => Value::Bool(*b),
         Expression::KeysLiteral(ks) => Value::Keys({
-            let mut modifiers = i_slint_core::input::KeyboardModifiers::default();
-            modifiers.alt = ks.modifiers.alt;
-            modifiers.control = ks.modifiers.control;
-            modifiers.shift = ks.modifiers.shift;
-            modifiers.meta = ks.modifiers.meta;
+            let modifiers = i_slint_core::input::KeyboardModifiers::new(
+                ks.modifiers.shift,
+                ks.modifiers.control,
+                ks.modifiers.alt,
+                ks.modifiers.meta,
+            );
             i_slint_core::input::make_keys(
                 SharedString::from(&*ks.key),
                 modifiers,

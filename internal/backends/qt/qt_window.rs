@@ -368,8 +368,14 @@ cpp! {{
             QString text =  event->text();
             int key = event->key();
             bool repeat = event->isAutoRepeat();
-            rust!(Slint_keyPress [rust_window: &QtWindow as "void*", key: i32 as "int", text: qttypes::QString as "QString", repeat: bool as "bool"] {
-                rust_window.key_event(key, text.clone(), false, repeat);
+            Qt::KeyboardModifiers mods = event->modifiers();
+            bool mod_shift = mods.testFlag(Qt::ShiftModifier);
+            bool mod_control = mods.testFlag(Qt::ControlModifier);
+            bool mod_alt = mods.testFlag(Qt::AltModifier);
+            bool mod_meta = mods.testFlag(Qt::MetaModifier);
+            rust!(Slint_keyPress [rust_window: &QtWindow as "void*", key: i32 as "int", text: qttypes::QString as "QString", repeat: bool as "bool",
+                mod_shift: bool as "bool", mod_control: bool as "bool", mod_alt: bool as "bool", mod_meta: bool as "bool"] {
+                rust_window.key_event(key, text.clone(), false, repeat, mod_shift, mod_control, mod_alt, mod_meta);
             });
         }
         void keyReleaseEvent(QKeyEvent *event) override {
@@ -382,8 +388,14 @@ cpp! {{
 
             QString text =  event->text();
             int key = event->key();
-            rust!(Slint_keyRelease [rust_window: &QtWindow as "void*", key: i32 as "int", text: qttypes::QString as "QString"] {
-                rust_window.key_event(key, text.clone(), true, false);
+            Qt::KeyboardModifiers mods = event->modifiers();
+            bool mod_shift = mods.testFlag(Qt::ShiftModifier);
+            bool mod_control = mods.testFlag(Qt::ControlModifier);
+            bool mod_alt = mods.testFlag(Qt::AltModifier);
+            bool mod_meta = mods.testFlag(Qt::MetaModifier);
+            rust!(Slint_keyRelease [rust_window: &QtWindow as "void*", key: i32 as "int", text: qttypes::QString as "QString",
+                mod_shift: bool as "bool", mod_control: bool as "bool", mod_alt: bool as "bool", mod_meta: bool as "bool"] {
+                rust_window.key_event(key, text.clone(), true, false, mod_shift, mod_control, mod_alt, mod_meta);
             });
         }
 
@@ -2216,7 +2228,17 @@ impl QtWindow {
         chosen.map(slint_drag_action_to_qt).unwrap_or(key_generated::Qt_DropAction_IgnoreAction)
     }
 
-    fn key_event(&self, key: i32, text: qttypes::QString, released: bool, repeat: bool) {
+    fn key_event(
+        &self,
+        key: i32,
+        text: qttypes::QString,
+        released: bool,
+        repeat: bool,
+        mod_shift: bool,
+        mod_control: bool,
+        mod_alt: bool,
+        mod_meta: bool,
+    ) {
         i_slint_core::animations::update_animations(i_slint_core::animations::Instant::now(
             WindowInner::from_pub(&self.window).context(),
         ));
@@ -2224,14 +2246,20 @@ impl QtWindow {
 
         let text = qt_key_to_string(key as key_generated::Qt_Key, text);
 
-        let event = if released {
-            WindowEvent::KeyReleased { text }
-        } else if repeat {
-            WindowEvent::KeyPressRepeated { text }
-        } else {
-            WindowEvent::KeyPressed { text }
+        let mut key_event = KeyEvent::default();
+        key_event.text = text;
+        key_event.repeat = repeat;
+
+        let modifiers =
+            i_slint_core::input::KeyboardModifiers::new(mod_shift, mod_control, mod_alt, mod_meta);
+
+        let event = InternalKeyEvent {
+            key_event,
+            event_type: if released { KeyEventType::KeyReleased } else { KeyEventType::KeyPressed },
+            authoritative_modifiers: Some(modifiers),
+            ..Default::default()
         };
-        self.window.dispatch_event(event);
+        self.window.dispatch_event(WindowEvent::internal(event));
 
         timer_event();
     }

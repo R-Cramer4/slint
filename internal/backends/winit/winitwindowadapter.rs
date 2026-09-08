@@ -438,6 +438,10 @@ pub struct WinitWindowAdapter {
 
     custom_cursor_source: Cell<Option<CustomCursorSource>>,
 
+    /// The latest aggregate Shift/Ctrl/Alt/Meta state reported by winit's `ModifiersChanged`,
+    /// attached to key events as `InternalKeyEvent::authoritative_modifiers` so core can correct
+    /// its own inferred modifier state (see that field's doc comment, and #7273).
+    current_modifiers: Cell<corelib::input::KeyboardModifiers>,
     /// Last seen cursor position.
     cursor_pos: Cell<LogicalPoint>,
     /// Whether a *mouse* button is currently pressed. Touch input is handled
@@ -491,6 +495,7 @@ impl WinitWindowAdapter {
             muda_enable_default_menu_bar,
             window_icon_cache_key: Default::default(),
             custom_cursor_source: Cell::new(None),
+            current_modifiers: Default::default(),
             cursor_pos: Default::default(),
             pressed: Default::default(),
             current_resize_direction: Default::default(),
@@ -1171,6 +1176,12 @@ impl WinitWindowAdapter {
         // We don't render popups as separate windows yet, so treat
         // focus to be the same as being active.
         if have_focus != runtime_window.active() {
+            if !have_focus {
+                // Core resets its own modifier state on deactivation; drop our cached
+                // snapshot too, so a stray `KeyboardInput` before the next `ModifiersChanged`
+                // (e.g. on refocus) can't reconcile it back to a stale, no-longer-held state.
+                self.current_modifiers.set(Default::default());
+            }
             slint_window.dispatch_event_with_result(
                 corelib::platform::WindowEvent::WindowActiveChanged(have_focus),
             )?;
@@ -1270,6 +1281,21 @@ impl WinitWindowAdapter {
                 self.activation_changed(have_focus)?;
             }
 
+            WinitWindowEvent::ModifiersChanged(modifiers) => {
+                // Same command/control/meta mapping as the `KeyboardInput` arm below.
+                let swap_cmd_ctrl = i_slint_core::is_apple_platform();
+                let state = modifiers.state();
+                let modifiers = corelib::input::KeyboardModifiers::new(
+                    state.shift_key(),
+                    if swap_cmd_ctrl { state.super_key() } else { state.control_key() },
+                    state.alt_key(),
+                    if swap_cmd_ctrl { state.control_key() } else { state.super_key() },
+                );
+                self.current_modifiers.set(modifiers);
+                self.dispatch_internal_event(corelib::platform::InternalEvent::ModifiersChanged(
+                    modifiers,
+                ));
+            }
             WinitWindowEvent::KeyboardInput { event, is_synthetic, .. } => {
                 let key_code = event.logical_key.clone();
                 // For now: Match Qt's behavior of mapping command to control and control to meta (LWin/RWin).
@@ -1371,6 +1397,7 @@ impl WinitWindowAdapter {
                     event_type,
                     #[cfg(target_os = "windows")]
                     text_without_modifiers,
+                    authoritative_modifiers: Some(self.current_modifiers.get()),
                     ..Default::default()
                 };
 

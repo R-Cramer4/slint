@@ -107,6 +107,26 @@ pub fn send_keyboard_char<
     send_keyboard_key_text(component, &SharedString::from(ch), pressed)
 }
 
+/// See [`testing_backend::send_authoritative_modifiers`](crate::testing_backend::send_authoritative_modifiers).
+pub fn send_authoritative_modifiers<
+    X: vtable::HasStaticVTable<ItemTreeVTable>,
+    Component: Into<vtable::VRc<ItemTreeVTable, X>> + ComponentHandle,
+>(
+    component: &Component,
+    shift: bool,
+    control: bool,
+    alt: bool,
+    meta: bool,
+) {
+    crate::testing_backend::send_authoritative_modifiers(
+        shift,
+        control,
+        alt,
+        meta,
+        &WindowInner::from_pub(component.window()).window_adapter(),
+    );
+}
+
 /// Applies the specified scale factor to the window that's associated with the given component.
 /// This overrides the value provided by the windowing system.
 pub fn set_window_scale_factor<

@@ -3954,14 +3954,7 @@ fn compile_keys_literal(expr: &Expression) -> TokenStream {
     quote!(
         sp::make_keys(
             #key.into(),
-            {
-                let mut modifiers = sp::KeyboardModifiers::default();
-                modifiers.alt = #alt;
-                modifiers.control = #control;
-                modifiers.shift = #shift;
-                modifiers.meta = #meta;
-                modifiers
-            },
+            sp::KeyboardModifiers::new(#shift, #control, #alt, #meta),
             #ignore_shift,
             #ignore_alt))
 }
