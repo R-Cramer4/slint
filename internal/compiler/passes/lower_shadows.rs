@@ -103,6 +103,28 @@ fn create_box_shadow_element(
         }
     }
 
+    for property_name in super::border_radius::CORNER_SHAPE_PROPERTIES {
+        let source_property = if sibling_element.borrow().is_binding_set(property_name, true) {
+            Some(SmolStr::new_static(property_name))
+        } else if sibling_element.borrow().is_binding_set("border-corner-shape", true) {
+            Some(SmolStr::new_static("border-corner-shape"))
+        } else {
+            None
+        };
+
+        if let Some(source_property) = source_property {
+            let target_property = SmolStr::new_static(property_name);
+            element.set_binding(
+                target_property,
+                Expression::PropertyReference(NamedReference::new(
+                    sibling_element,
+                    source_property,
+                ))
+                .into(),
+            );
+        }
+    }
+
     Some(element)
 }
 

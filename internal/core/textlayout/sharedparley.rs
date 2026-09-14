@@ -207,6 +207,7 @@ pub fn draw_text(
                 item_renderer.combine_clip(
                     LogicalRect::new(LogicalPoint::default(), size),
                     LogicalBorderRadius::zero(),
+                    crate::lengths::CornerShapes::default(),
                 )
             } else {
                 true
@@ -355,6 +356,7 @@ pub fn draw_text_input(
             let render = item_renderer.combine_clip(
                 LogicalRect::new(LogicalPoint::default(), size),
                 LogicalBorderRadius::zero(),
+                crate::lengths::CornerShapes::default(),
             );
 
             if render {

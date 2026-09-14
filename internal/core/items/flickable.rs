@@ -220,6 +220,7 @@ impl Item for Flickable {
         (*backend).combine_clip(
             LogicalRect::new(LogicalPoint::default(), size),
             LogicalBorderRadius::zero(),
+            crate::lengths::CornerShapes::default(),
         );
         RenderingResult::ContinueRenderingChildren
     }

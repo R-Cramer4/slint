@@ -151,6 +151,9 @@ pub enum BuiltinFunction {
     DefaultWindowTitle,
     PathPointAt,
     PathAngleAt,
+    /// Constructs `CornerShape::Superellipse(k)` from its CSS-style `k` exponent.
+    /// Rust-only: not exposed through cbindgen, Python, or Node bindings.
+    CornerShapeSuperellipse,
 }
 
 #[derive(Debug, Clone)]
@@ -341,6 +344,9 @@ declare_builtin_function_types!(
     MacosBringAllWindowsToFront: () -> Type::Void,
     PathPointAt: (Type::ElementReference, Type::Float32) -> typeregister::logical_point_type().into(),
     PathAngleAt: (Type::ElementReference, Type::Float32) -> Type::Angle,
+    CornerShapeSuperellipse: (Type::Float32) -> Type::Enumeration(
+        typeregister::BUILTIN.enums.CornerShape.clone(),
+    ),
 );
 
 impl Default for BuiltinFunctionTypes {
@@ -464,6 +470,7 @@ impl BuiltinFunction {
             BuiltinFunction::ArrayAny
             | BuiltinFunction::ArrayAll
             | BuiltinFunction::ArrayFindIndex => true,
+            BuiltinFunction::CornerShapeSuperellipse => true,
         }
     }
 
@@ -565,6 +572,7 @@ impl BuiltinFunction {
             BuiltinFunction::ArrayAny
             | BuiltinFunction::ArrayAll
             | BuiltinFunction::ArrayFindIndex => true,
+            BuiltinFunction::CornerShapeSuperellipse => true,
         }
     }
 }

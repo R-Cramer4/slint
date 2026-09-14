@@ -33,8 +33,8 @@ use crate::item_tree::ItemTreeRc;
 pub use crate::item_tree::{ItemRc, ItemTreeVTable};
 use crate::layout::LayoutInfo;
 use crate::lengths::{
-    LogicalBorderRadius, LogicalLength, LogicalRect, LogicalSize, LogicalVector, PointLengths,
-    RectLengths,
+    CornerShapes, LogicalBorderRadius, LogicalLength, LogicalRect, LogicalSize, LogicalVector,
+    PointLengths, RectLengths,
 };
 pub use crate::menus::MenuItem;
 #[cfg(feature = "rtti")]
@@ -450,6 +450,7 @@ pub struct BasicBorderRectangle {
     pub border_width: Property<LogicalLength>,
     pub border_radius: Property<LogicalLength>,
     pub border_color: Property<Brush>,
+    pub border_corner_shape: Property<CornerShape>,
     pub cached_rendering_data: CachedRenderingData,
 }
 
@@ -549,6 +550,9 @@ impl RenderBorderRectangle for BasicBorderRectangle {
     fn border_radius(self: Pin<&Self>) -> LogicalBorderRadius {
         LogicalBorderRadius::from_length(self.border_radius())
     }
+    fn border_corner_shape(self: Pin<&Self>) -> CornerShapes {
+        CornerShapes::new_uniform(self.border_corner_shape())
+    }
     fn border_color(self: Pin<&Self>) -> Brush {
         self.border_color()
     }
@@ -577,6 +581,11 @@ pub struct BorderRectangle {
     pub border_top_right_radius: Property<LogicalLength>,
     pub border_bottom_left_radius: Property<LogicalLength>,
     pub border_bottom_right_radius: Property<LogicalLength>,
+    pub border_corner_shape: Property<CornerShape>,
+    pub border_top_left_corner_shape: Property<CornerShape>,
+    pub border_top_right_corner_shape: Property<CornerShape>,
+    pub border_bottom_left_corner_shape: Property<CornerShape>,
+    pub border_bottom_right_corner_shape: Property<CornerShape>,
     pub border_color: Property<Brush>,
     pub cached_rendering_data: CachedRenderingData,
 }
@@ -682,6 +691,14 @@ impl RenderBorderRectangle for BorderRectangle {
             self.border_bottom_left_radius(),
         )
     }
+    fn border_corner_shape(self: Pin<&Self>) -> CornerShapes {
+        CornerShapes::new(
+            self.border_top_left_corner_shape(),
+            self.border_top_right_corner_shape(),
+            self.border_bottom_right_corner_shape(),
+            self.border_bottom_left_corner_shape(),
+        )
+    }
     fn border_color(self: Pin<&Self>) -> Brush {
         self.border_color()
     }
@@ -727,6 +744,10 @@ pub struct Clip {
     pub border_top_right_radius: Property<LogicalLength>,
     pub border_bottom_left_radius: Property<LogicalLength>,
     pub border_bottom_right_radius: Property<LogicalLength>,
+    pub border_top_left_corner_shape: Property<CornerShape>,
+    pub border_top_right_corner_shape: Property<CornerShape>,
+    pub border_bottom_left_corner_shape: Property<CornerShape>,
+    pub border_bottom_right_corner_shape: Property<CornerShape>,
     pub border_width: Property<LogicalLength>,
     pub cached_rendering_data: CachedRenderingData,
     pub clip: Property<bool>,
@@ -836,6 +857,15 @@ impl Clip {
             self.border_top_right_radius(),
             self.border_bottom_right_radius(),
             self.border_bottom_left_radius(),
+        )
+    }
+
+    pub fn logical_corner_shape(self: Pin<&Self>) -> CornerShapes {
+        CornerShapes::new(
+            self.border_top_left_corner_shape(),
+            self.border_top_right_corner_shape(),
+            self.border_bottom_right_corner_shape(),
+            self.border_bottom_left_corner_shape(),
         )
     }
 }
@@ -1795,6 +1825,10 @@ pub struct BoxShadow {
     pub border_top_right_radius: Property<LogicalLength>,
     pub border_bottom_left_radius: Property<LogicalLength>,
     pub border_bottom_right_radius: Property<LogicalLength>,
+    pub border_top_left_corner_shape: Property<CornerShape>,
+    pub border_top_right_corner_shape: Property<CornerShape>,
+    pub border_bottom_left_corner_shape: Property<CornerShape>,
+    pub border_bottom_right_corner_shape: Property<CornerShape>,
     // Shadow specific properties
     pub offset_x: Property<LogicalLength>,
     pub offset_y: Property<LogicalLength>,
@@ -1812,6 +1846,15 @@ impl BoxShadow {
             self.border_top_right_radius(),
             self.border_bottom_right_radius(),
             self.border_bottom_left_radius(),
+        )
+    }
+
+    pub fn logical_corner_shape(self: Pin<&Self>) -> CornerShapes {
+        CornerShapes::new(
+            self.border_top_left_corner_shape(),
+            self.border_top_right_corner_shape(),
+            self.border_bottom_right_corner_shape(),
+            self.border_bottom_left_corner_shape(),
         )
     }
 }
@@ -1961,27 +2004,88 @@ declare_item_vtable! {
 }
 
 macro_rules! declare_enums {
-    ($( $(#[$enum_doc:meta])* $vis:vis enum $Name:ident { $( $(#[$value_doc:meta])* $Value:ident,)* })*) => {
-        $(
-            #[derive(Copy, Clone, Debug, PartialEq, Eq, strum::EnumString, strum::Display, Hash)]
-            #[repr(u32)]
-            #[strum(serialize_all = "kebab-case")]
-            $(#[$enum_doc])*
-            pub enum $Name {
-                $( $(#[$value_doc])* $Value),*
-            }
+    () => {};
+    // An enum where every variant is a bare identifier: the common case, generated exactly
+    // as before (derives that need `Eq`/`Hash`/a stable `#[repr]`, plus `strum` for the
+    // string round-trip the .slint property system and interpreter rely on).
+    (
+        $(#[$enum_doc:meta])* $vis:vis enum $Name:ident { $( $(#[$value_doc:meta])* $Value:ident,)* }
+        $($rest:tt)*
+    ) => {
+        #[derive(Copy, Clone, Debug, PartialEq, Eq, strum::EnumString, strum::Display, Hash)]
+        #[repr(u32)]
+        #[strum(serialize_all = "kebab-case")]
+        $(#[$enum_doc])*
+        pub enum $Name {
+            $( $(#[$value_doc])* $Value),*
+        }
 
-            impl Default for $Name {
-                fn default() -> Self {
-                    // Always return the first value
-                    ($(Self::$Value,)*).0
-                }
+        impl Default for $Name {
+            fn default() -> Self {
+                // Always return the first value
+                ($(Self::$Value,)*).0
             }
-        )*
+        }
+
+        declare_enums! { $($rest)* }
+    };
+    // Fallback for an enum with at least one Rust-only, payload-carrying variant (e.g.
+    // `CornerShape::Superellipse(f32)`): `Eq`/`Hash`/`#[repr(u32)]` don't apply to a variant
+    // with an `f32` field, and `strum` can't derive a string round-trip for it either, so
+    // this enum gets its `Display`/`FromStr` hand-written right after the macro invocation.
+    (
+        $(#[$enum_doc:meta])* $vis:vis enum $Name:ident { $( $(#[$value_doc:meta])* $Value:ident $(($ValueTy:ty))?,)* }
+        $($rest:tt)*
+    ) => {
+        #[derive(Copy, Clone, Debug, PartialEq)]
+        $(#[$enum_doc])*
+        pub enum $Name {
+            $( $(#[$value_doc])* $Value $(($ValueTy))?),*
+        }
+
+        impl Default for $Name {
+            fn default() -> Self {
+                // Always return the first value
+                ($(Self::$Value,)*).0
+            }
+        }
+
+        declare_enums! { $($rest)* }
     };
 }
 
 i_slint_common::for_each_enums!(declare_enums);
+
+impl core::fmt::Display for CornerShape {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            CornerShape::Round => "round",
+            CornerShape::Squircle => "squircle",
+            CornerShape::Bevel => "bevel",
+            CornerShape::Scoop => "scoop",
+            CornerShape::Notch => "notch",
+            CornerShape::Square => "square",
+            // Rust-only: never produced from a .slint identifier, so this name is never parsed back.
+            CornerShape::Superellipse(_) => "superellipse",
+        })
+    }
+}
+
+impl core::str::FromStr for CornerShape {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "round" => Ok(CornerShape::Round),
+            "squircle" => Ok(CornerShape::Squircle),
+            "bevel" => Ok(CornerShape::Bevel),
+            "scoop" => Ok(CornerShape::Scoop),
+            "notch" => Ok(CornerShape::Notch),
+            "square" => Ok(CornerShape::Square),
+            _ => Err(()),
+        }
+    }
+}
 
 /// Internal transparent hover tracker synthesized by tooltip lowering.
 #[repr(C)]

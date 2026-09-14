@@ -5106,6 +5106,10 @@ fn compile_builtin_function_call(
                 sp::report_model_error("insert", None, result);
             })
         }
+        BuiltinFunction::CornerShapeSuperellipse => {
+            let k = a.next().unwrap();
+            quote!(sp::CornerShape::Superellipse(#k as f32))
+        }
         BuiltinFunction::Rgb => {
             let (r, g, b, a) =
                 (a.next().unwrap(), a.next().unwrap(), a.next().unwrap(), a.next().unwrap());

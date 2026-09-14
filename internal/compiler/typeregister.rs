@@ -54,7 +54,10 @@ pub const RESERVED_GRIDLAYOUT_PROPERTIES: &[(&str, Type)] = &[
 pub const RESERVED_LAYOUT_CELL_PROPERTIES: &[(&str, Type)] = &[("layout-order", Type::Int32)];
 
 macro_rules! declare_enums {
-    ($( $(#[$enum_doc:meta])* $vis:vis enum $Name:ident { $( $(#[$value_doc:meta])* $Value:ident,)* })*) => {
+    // The optional `($ValueTy)` tolerates a Rust-only, payload-carrying variant (such as
+    // `CornerShape::Superellipse(f32)`); its name is still registered like any other value,
+    // since the .slint type system only needs the name here, never the payload.
+    ($( $(#[$enum_doc:meta])* $vis:vis enum $Name:ident { $( $(#[$value_doc:meta])* $Value:ident $(($ValueTy:ty))?,)* })*) => {
         #[allow(non_snake_case)]
         pub struct BuiltinEnums {
             $(pub $Name : Arc<Enumeration>),*

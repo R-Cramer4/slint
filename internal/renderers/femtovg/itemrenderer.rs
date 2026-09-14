@@ -104,7 +104,17 @@ pub struct GLItemRenderer<'a, R: femtovg::Renderer + TextureImporter> {
 fn rect_with_radius_to_path(
     rect: PhysicalRect,
     border_radius: PhysicalBorderRadius,
+    corner_shape: i_slint_core::lengths::CornerShapes,
 ) -> femtovg::Path {
+    use i_slint_core::items::CornerShape::Round;
+    let all_round = matches!(
+        (corner_shape.top_left, corner_shape.top_right, corner_shape.bottom_right, corner_shape.bottom_left),
+        (Round, Round, Round, Round)
+    );
+    if !all_round {
+        return corner_shape_path_to_femtovg_path(rect, border_radius, corner_shape);
+    }
+
     let mut path = femtovg::Path::new();
     let x = rect.origin.x;
     let y = rect.origin.y;
@@ -134,8 +144,49 @@ fn rect_with_radius_to_path(
     path
 }
 
+/// Builds the path for a rectangle that has at least one non-round corner, via the
+/// shape-agnostic path builder in `i-slint-core` (see `is_all_round`-style fast path above,
+/// which handles the common circular-corner case with FemtoVG's own native primitives instead).
+fn corner_shape_path_to_femtovg_path(
+    rect: PhysicalRect,
+    border_radius: PhysicalBorderRadius,
+    corner_shape: i_slint_core::lengths::CornerShapes,
+) -> femtovg::Path {
+    let lyon_path = i_slint_core::graphics::corner_path::rounded_rect_path(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.width,
+        rect.size.height,
+        border_radius,
+        corner_shape,
+    );
+    let mut path = femtovg::Path::new();
+    for event in lyon_path.iter() {
+        match event {
+            lyon_path::Event::Begin { at } => path.move_to(at.x, at.y),
+            lyon_path::Event::Line { from: _, to } => path.line_to(to.x, to.y),
+            lyon_path::Event::Quadratic { from: _, ctrl, to } => {
+                path.quad_to(ctrl.x, ctrl.y, to.x, to.y)
+            }
+            lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
+                path.bezier_to(ctrl1.x, ctrl1.y, ctrl2.x, ctrl2.y, to.x, to.y)
+            }
+            lyon_path::Event::End { last: _, first: _, close } => {
+                if close {
+                    path.close();
+                }
+            }
+        }
+    }
+    path
+}
+
 fn rect_to_path(r: PhysicalRect) -> femtovg::Path {
-    rect_with_radius_to_path(r, PhysicalBorderRadius::default())
+    rect_with_radius_to_path(
+        r,
+        PhysicalBorderRadius::default(),
+        i_slint_core::lengths::CornerShapes::default(),
+    )
 }
 
 impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
@@ -196,12 +247,19 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
 
         let mut canvas = self.canvas.borrow_mut();
         if let Some(paint) = fill_paint {
-            let background_path =
-                rect_with_radius_to_path(layout.background_rect, layout.background_radius);
+            let background_path = rect_with_radius_to_path(
+                layout.background_rect,
+                layout.background_radius,
+                layout.corner_shape,
+            );
             canvas.fill_path(&background_path, &paint);
         }
         if let Some(border_paint) = border_paint {
-            let border_path = rect_with_radius_to_path(layout.border_rect, layout.border_radius);
+            let border_path = rect_with_radius_to_path(
+                layout.border_rect,
+                layout.border_radius,
+                layout.corner_shape,
+            );
             canvas.stroke_path(&border_path, &border_paint);
         }
     }
@@ -407,6 +465,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
                 let width = shadow_options.width;
                 let height = shadow_options.height;
                 let radius = shadow_options.radius;
+                let corner_shape = shadow_options.corner_shape;
 
                 let shadow_rect = PhysicalRect::new(
                     PhysicalPoint::default(),
@@ -444,6 +503,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
                             PhysicalSize::from_lengths(width, height),
                         ),
                         radius,
+                        corner_shape,
                     );
                     canvas.fill_path(
                         &shadow_path,
@@ -563,6 +623,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             clip_item.logical_border_radius(),
             clip_item.border_width(),
         );
+        let clip_shape = clip_item.logical_corner_shape();
 
         // If clipping is enabled but the clip element is outside the visible range, then we don't
         // need to bother doing anything, not even rendering the children.
@@ -590,6 +651,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
                 let layer_path = rect_with_radius_to_path(
                     clip_rect * self.scale_factor,
                     clip_radius * self.scale_factor,
+                    clip_shape,
                 );
 
                 self.canvas.borrow_mut().save_with(|canvas| {
@@ -609,12 +671,17 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             RenderingResult::ContinueRenderingWithoutChildren
         } else {
             self.layer_cache.release(item_rc);
-            self.combine_clip(clip_rect, clip_radius);
+            self.combine_clip(clip_rect, clip_radius, clip_shape);
             RenderingResult::ContinueRenderingChildren
         }
     }
 
-    fn combine_clip(&mut self, clip_rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        clip_rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        _shape: i_slint_core::lengths::CornerShapes,
+    ) -> bool {
         let clip = &mut self.state.last_mut().unwrap().scissor;
         let clip_region_valid = match clip.intersection(&clip_rect) {
             Some(r) => {

@@ -381,37 +381,73 @@ pub(super) fn draw_rounded_rectangle_line(
         (Shifted::new(width) + Shifted::new(rr.right_clip.get() + extra_right_clip))
             .saturating_sub(x)
     };
-    let calculate_xxxx = |r: i16, y: i16| {
-        let r = Shifted::new(r);
-        // `y` is how far away from the center of the circle the current line is.
-        let y = r - Shifted::new(y);
-        // Circle equation: x = √(r² - y²)
-        // Coordinate from the left edge: x' = r - x
-        let x2 = r - (r * r).saturating_sub(y * y).sqrt();
-        let x1 = r - (r * r).saturating_sub((y - ONE) * (y - ONE)).sqrt();
-        let r2 = r.saturating_sub(border);
-        let x4 = r - (r2 * r2).saturating_sub(y * y).sqrt();
-        let x3 = r - (r2 * r2).saturating_sub((y - ONE) * (y - ONE)).sqrt();
-        (x1, x2, x3, x4)
+    // The border's inner edge is the same corner curve shrunk by the border width,
+    // concentric with the outer curve - so the stroke stays a uniform width all the way
+    // around, whatever the shape. `Round` keeps its exact fixed-point formula (the general
+    // one below reduces to it algebraically, but this avoids the sqrt-of-negative dance and
+    // any floating point drift for the common case).
+    let calculate_xxxx = |r: i16, shape: i_slint_core::items::CornerShape, y: i16| {
+        if matches!(shape, i_slint_core::items::CornerShape::Round) {
+            let r = Shifted::new(r);
+            // `y` is how far away from the center of the circle the current line is.
+            let y = r - Shifted::new(y);
+            // Circle equation: x = √(r² - y²)
+            // Coordinate from the left edge: x' = r - x
+            let x2 = r - (r * r).saturating_sub(y * y).sqrt();
+            let x1 = r - (r * r).saturating_sub((y - ONE) * (y - ONE)).sqrt();
+            let r2 = r.saturating_sub(border);
+            let x4 = r - (r2 * r2).saturating_sub(y * y).sqrt();
+            let x3 = r - (r2 * r2).saturating_sub((y - ONE) * (y - ONE)).sqrt();
+            (x1, x2, x3, x4)
+        } else {
+            let to_shifted = |v: f32| Shifted((v.max(0.0) * 16.0).round() as u32);
+            let rf = r as f32;
+            let border_f = border.0 as f32 / 16.0;
+            let r2f = (rf - border_f).max(0.0);
+            let n = i_slint_core::graphics::SQUIRCLE_EXPONENT;
+            let x2 = to_shifted(i_slint_core::graphics::corner_boundary(shape, n, rf, y as f32));
+            let x1 =
+                to_shifted(i_slint_core::graphics::corner_boundary(shape, n, rf, y as f32 + 1.0));
+            let x4 = to_shifted(i_slint_core::graphics::inner_corner_boundary(
+                shape,
+                n,
+                rf,
+                r2f,
+                y as f32,
+            ));
+            let x3 = to_shifted(i_slint_core::graphics::inner_corner_boundary(
+                shape,
+                n,
+                rf,
+                r2f,
+                y as f32 + 1.0,
+            ));
+            (x1, x2, x3, x4)
+        }
     };
 
-    let (x1, x2, x3, x4, x5, x6, x7, x8) = if let Some(r) = rr.radius.as_uniform() {
-        let (x1, x2, x3, x4) =
-            if y.get() < r { calculate_xxxx(r, y.get()) } else { (ZERO, ZERO, border, border) };
+    let (x1, x2, x3, x4, x5, x6, x7, x8) = if let (Some(r), Some(shape)) =
+        (rr.radius.as_uniform(), rr.corner_shape.as_uniform())
+    {
+        let (x1, x2, x3, x4) = if y.get() < r {
+            calculate_xxxx(r, shape, y.get())
+        } else {
+            (ZERO, ZERO, border, border)
+        };
         (x1, x2, x3, x4, rev(x4), rev(x3), rev(x2), rev(x1))
     } else {
         let (x1, x2, x3, x4) = if y1 < PhysicalLength::new(rr.radius.top_left) {
-            calculate_xxxx(rr.radius.top_left, y.get())
+            calculate_xxxx(rr.radius.top_left, rr.corner_shape.top_left, y.get())
         } else if y2 < PhysicalLength::new(rr.radius.bottom_left) {
-            calculate_xxxx(rr.radius.bottom_left, y.get())
+            calculate_xxxx(rr.radius.bottom_left, rr.corner_shape.bottom_left, y.get())
         } else {
             (ZERO, ZERO, border, border)
         };
         let (x5, x6, x7, x8) = if y1 < PhysicalLength::new(rr.radius.top_right) {
-            let x = calculate_xxxx(rr.radius.top_right, y.get());
+            let x = calculate_xxxx(rr.radius.top_right, rr.corner_shape.top_right, y.get());
             (x.3, x.2, x.1, x.0)
         } else if y2 < PhysicalLength::new(rr.radius.bottom_right) {
-            let x = calculate_xxxx(rr.radius.bottom_right, y.get());
+            let x = calculate_xxxx(rr.radius.bottom_right, rr.corner_shape.bottom_right, y.get());
             (x.3, x.2, x.1, x.0)
         } else {
             (border, border, ZERO, ZERO)

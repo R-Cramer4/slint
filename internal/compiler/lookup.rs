@@ -916,6 +916,12 @@ impl LookupObject for Arc<Enumeration> {
         if ctx.diag.is_slint_sc() && self.node.is_none() {
             return None;
         }
+        // `CornerShape.superellipse(k)` is Rust-only: it carries a `k` argument that a
+        // plain, index-based `EnumerationValue` can't represent, so it resolves to a
+        // callable builtin instead of a value, and only the Rust generator implements it.
+        if self.name == "CornerShape" && name.eq_ignore_ascii_case("superellipse") {
+            return Some(LookupResult::from(BuiltinFunction::CornerShapeSuperellipse));
+        }
         let value = self.values.iter().position(|v| v == name)?;
         Some(
             Expression::EnumerationValue(EnumerationValue { value, enumeration: self.clone() })

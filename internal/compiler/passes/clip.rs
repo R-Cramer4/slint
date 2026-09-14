@@ -100,6 +100,27 @@ fn create_clip_element(parent_elem: &ElementRc, native_clip: &Arc<NativeClass>) 
             );
         }
     }
+
+    if super::border_radius::CORNER_SHAPE_PROPERTIES
+        .iter()
+        .any(|property_name| parent_elem.borrow().is_binding_set(property_name, true))
+    {
+        for optional_binding in super::border_radius::CORNER_SHAPE_PROPERTIES.iter() {
+            copy_optional_binding(parent_elem, optional_binding, &clip);
+        }
+    } else if parent_elem.borrow().binding("border-corner-shape").is_some() {
+        for prop in super::border_radius::CORNER_SHAPE_PROPERTIES.iter() {
+            clip.borrow_mut().set_binding(
+                SmolStr::new(prop),
+                Expression::PropertyReference(NamedReference::new(
+                    parent_elem,
+                    SmolStr::new_static("border-corner-shape"),
+                ))
+                .into(),
+            );
+        }
+    }
+
     clip.borrow_mut().set_binding(
         SmolStr::new_static("clip"),
         BindingExpression::new_two_way(

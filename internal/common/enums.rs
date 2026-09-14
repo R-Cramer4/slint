@@ -641,6 +641,27 @@ macro_rules! for_each_enums {
                 Bevel,
             }
 
+            /// This enum describes the shape of a rounded corner.
+            #[non_exhaustive]
+            enum CornerShape {
+                /// A circular arc.
+                Round,
+                /// A smooth curve that blends into the straight edges, avoiding the visual pinch of a circular arc.
+                Squircle,
+                /// A straight diagonal cut across the corner.
+                Bevel,
+                /// A concave circular arc that curves inward.
+                Scoop,
+                /// A rectangular cutout at the corner.
+                Notch,
+                /// A sharp, right-angled corner.
+                Square,
+                /// A superellipse corner at a custom CSS `corner-shape: superellipse(k)`
+                /// exponent `k`, where the underlying exponent is `n = 2^k`. Rust-only:
+                /// not settable from `.slint` markup or the C++/Python/Node bindings.
+                Superellipse(f32),
+            }
+
             /// This enum describes the action negotiated between the source of a drag (`DragArea`)
             /// and its target (`DropArea`) during a drag-and-drop operation. The source declares
             /// which actions it permits, the target picks one in its `can-drop` callback, and the

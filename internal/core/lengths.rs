@@ -17,6 +17,8 @@ pub type LogicalSize = euclid::Size2D<Coord, LogicalPx>;
 pub type LogicalVector = euclid::Vector2D<Coord, LogicalPx>;
 pub type LogicalBorderRadius = BorderRadius<Coord, LogicalPx>;
 pub type PhysicalBorderRadius = BorderRadius<f32, PhysicalPx>;
+/// The corner shape of each of the four corners; unitless, as a shape doesn't scale.
+pub type CornerShapes = BorderRadius<crate::items::CornerShape, ()>;
 pub type ItemTransform = euclid::Transform2D<f32, LogicalPx, LogicalPx>;
 
 pub type ScaleFactor = euclid::Scale<f32, LogicalPx, PhysicalPx>;

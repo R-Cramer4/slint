@@ -12,6 +12,9 @@ use euclid::approxord::{max, min};
 use euclid::num::Zero;
 use euclid::{Length, Scale};
 use num_traits::NumCast;
+#[cfg(not(feature = "std"))]
+#[allow(unused_imports)]
+use num_traits::Float;
 
 /// Top-left, top-right, bottom-right, and bottom-left border radius, optionally
 /// tagged with a unit.
@@ -230,6 +233,13 @@ macro_rules! approx_eq {
 approx_eq!(i16, 0);
 approx_eq!(i32, 0);
 approx_eq!(f32, f32::EPSILON);
+
+impl ApproxEq<crate::items::CornerShape> for crate::items::CornerShape {
+    #[inline]
+    fn approx_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
 
 impl<T, U> Add for BorderRadius<T, U>
 where
@@ -465,6 +475,81 @@ where
             _ => None,
         }
     }
+}
+
+/// The superellipse exponent used to render [`CornerShape::Squircle`](crate::items::CornerShape::Squircle).
+pub const SQUIRCLE_EXPONENT: f32 = 4.0;
+
+/// Converts the CSS `corner-shape: superellipse(k)` exponent to the `n` used by
+/// [`corner_boundary`]'s superellipse formula, per the CSS spec: `n = 2^k`.
+pub fn superellipse_n_from_k(k: f32) -> f32 {
+    2f32.powf(k)
+}
+
+/// The `|x/r|^n + |y/r|^n = 1` superellipse boundary shared by [`CornerShape::Squircle`]
+/// and [`CornerShape::Superellipse`](crate::items::CornerShape::Superellipse).
+fn superellipse_boundary(n: f32, r: f32, y: f32) -> f32 {
+    let n = n.max(0.01);
+    let u = (r - y) / r;
+    r * (1.0 - (1.0 - u.powf(n)).max(0.0).powf(1.0 / n))
+}
+
+/// Where a corner's boundary crosses the row `y` rows down from the corner's tip
+/// (`y` from 0, the tip, to `r`, where the corner meets the straight edge), as a
+/// column offset from that same tip.
+///
+/// Every [`CornerShape`](crate::items::CornerShape) but `Scoop` is one exponent
+/// of the same superellipse `|x/r|^n + |y/r|^n = 1`: `n = 0` degenerates to
+/// `Notch` (the whole corner cut away), `n = 1` is the straight diagonal of
+/// `Bevel`, `n = 2` is `Round`'s circular arc, and `n → ∞` is `Square` (no cut
+/// at all). `Squircle` is just this family at a caller-chosen `n`, conventionally
+/// 4. `Scoop` alone bulges the other way - a concave arc centered on the tip
+/// itself rather than inset by `r` - so it isn't reachable through any exponent
+/// and gets its own formula.
+pub fn corner_boundary(shape: crate::items::CornerShape, n: f32, r: f32, y: f32) -> f32 {
+    use crate::items::CornerShape;
+    if r <= 0.0 {
+        return 0.0;
+    }
+    let y = y.clamp(0.0, r);
+    match shape {
+        CornerShape::Square => 0.0,
+        CornerShape::Notch => {
+            if y >= r {
+                0.0
+            } else {
+                r
+            }
+        }
+        CornerShape::Bevel => r - y,
+        CornerShape::Round => r - (r * r - (r - y) * (r - y)).max(0.0).sqrt(),
+        CornerShape::Squircle => superellipse_boundary(n, r, y),
+        CornerShape::Scoop => (r * r - y * y).max(0.0).sqrt(),
+        CornerShape::Superellipse(k) => superellipse_boundary(superellipse_n_from_k(k), r, y),
+    }
+}
+
+/// Like [`corner_boundary`], but for the border's inner edge: the same corner curve shrunk
+/// by the border width `r - r2`, concentric with the outer curve (`r`) rather than a fresh
+/// curve anchored at its own tip. This is what keeps a stroked rounded corner a uniform
+/// width all the way around, the way [`CornerShape::Round`] already does by construction
+/// (shrinking a circle's radius while keeping its center never moves the center).
+pub fn inner_corner_boundary(shape: crate::items::CornerShape, n: f32, r: f32, r2: f32, y: f32) -> f32 {
+    if r <= 0.0 {
+        return 0.0;
+    }
+    if r2 <= 0.0 {
+        // The border is at least as wide as the radius: no fill ever shows through this
+        // corner, so its boundary coincides with the outer one.
+        return r;
+    }
+    let k = r2 / r;
+    let t = r - (r - y) / k;
+    if t <= 0.0 {
+        // The shrunk curve hasn't started yet at this row; same as above.
+        return r;
+    }
+    r - k * (r - corner_boundary(shape, n, r, t.min(r)))
 }
 
 #[cfg(test)]

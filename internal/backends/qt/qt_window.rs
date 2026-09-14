@@ -1127,7 +1127,14 @@ impl ItemRenderer for QtItemRenderer<'_> {
         }
     }
 
-    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        // TODO: the Qt backend only clips to a circular-radius rounded rect; other corner
+        // shapes aren't reflected in the clip region.
+        _shape: i_slint_core::lengths::CornerShapes,
+    ) -> bool {
         let clip_rect = qttypes::QRectF {
             x: rect.min_x() as _,
             y: rect.min_y() as _,

@@ -154,6 +154,7 @@ fn builtin_function_cost(function: &BuiltinFunction) -> isize {
         BuiltinFunction::ArrayPush
         | BuiltinFunction::ArrayRemove
         | BuiltinFunction::ArrayInsert => ALLOC_COST,
+        BuiltinFunction::CornerShapeSuperellipse => 10,
         BuiltinFunction::Rgb => 50,
         BuiltinFunction::Hsv => 50,
         BuiltinFunction::Oklch => 50,

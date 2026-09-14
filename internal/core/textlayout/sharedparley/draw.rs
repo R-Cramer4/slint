@@ -495,6 +495,7 @@ impl TextParagraph {
                 ),
             ),
             LogicalBorderRadius::zero(),
+            crate::lengths::CornerShapes::default(),
         );
 
         if render {

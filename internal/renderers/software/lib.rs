@@ -46,8 +46,8 @@ use i_slint_core::item_rendering::{
 use i_slint_core::item_tree::ItemTreeWeak;
 use i_slint_core::items::{ItemRc, TextOverflow, TextWrap};
 use i_slint_core::lengths::{
-    LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
-    PhysicalPx, PointLengths, RectLengths, ScaleFactor, SizeLengths,
+    CornerShapes, LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize,
+    LogicalVector, PhysicalPx, PointLengths, RectLengths, ScaleFactor, SizeLengths,
 };
 use i_slint_core::partial_renderer::{DirtyRegion, PartialRenderingState};
 use i_slint_core::renderer::RendererSealed;
@@ -160,7 +160,7 @@ impl<T: Copy + NumCast + core::ops::Sub<Output = T>> Transform for euclid::Rect<
     }
 }
 
-impl<T: Copy> Transform for BorderRadius<T, PhysicalPx> {
+impl<T: Copy, U> Transform for BorderRadius<T, U> {
     fn transformed(self, info: RotationInfo) -> Self {
         match info.orientation {
             RenderingRotation::NoRotation => self,
@@ -1793,6 +1793,12 @@ fn process_rectangle_impl(
         bottom_left: args.bottom_left_radius as _,
         _unit: Default::default(),
     };
+    let corner_shape = CornerShapes::new(
+        args.top_left_corner_shape,
+        args.top_right_corner_shape,
+        args.bottom_right_corner_shape,
+        args.bottom_left_corner_shape,
+    );
 
     if !radius.is_zero() {
         // Add a small value to make sure that the clip is always positive despite floating point shenanigans
@@ -1802,6 +1808,7 @@ fn process_rectangle_impl(
             clipped.round().cast(),
             RoundedRectangle {
                 radius,
+                corner_shape,
                 width: border,
                 border_color,
                 inner_color: color,
@@ -2705,6 +2712,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 .transformed(self.rotation)
                 .min(BorderRadius::from_length(geom.width_length() / 2.))
                 .min(BorderRadius::from_length(geom.height_length() / 2.));
+            let corner_shape = rect.border_corner_shape().transformed(self.rotation);
 
             let border = rect.border_width().cast() * self.scale_factor;
             let border_color =
@@ -2719,6 +2727,10 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 top_right_radius: radius.top_right,
                 bottom_right_radius: radius.bottom_right,
                 bottom_left_radius: radius.bottom_left,
+                top_left_corner_shape: corner_shape.top_left,
+                top_right_corner_shape: corner_shape.top_right,
+                bottom_right_corner_shape: corner_shape.bottom_right,
+                bottom_left_corner_shape: corner_shape.bottom_left,
                 border_width: border.get(),
                 background: rect.background(),
                 border: border_color,
@@ -3065,7 +3077,12 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
         // TODO
     }
 
-    fn combine_clip(&mut self, other: LogicalRect, _radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        other: LogicalRect,
+        _radius: LogicalBorderRadius,
+        _shape: CornerShapes,
+    ) -> bool {
         match self.current_state.clip.intersection(&other) {
             Some(r) => {
                 self.current_state.clip = r;
