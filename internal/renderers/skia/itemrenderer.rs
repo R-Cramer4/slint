@@ -106,10 +106,8 @@ impl<'a> SkiaItemRenderer<'a> {
             skia_safe::AlphaType::Premul,
         );
 
-        let rounded_rect = to_skia_rrect(
-            &PhysicalRect::new(shadow_options.shape_origin(), shape_size),
-            &shadow_options.outer_radius(),
-        );
+        let shape_rect = PhysicalRect::new(shadow_options.shape_origin(), shape_size);
+        let outer_radius = shadow_options.outer_radius();
 
         let mut paint = crate::solid_paint(&shadow_options.color);
         paint.set_anti_alias(true);
@@ -124,7 +122,14 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut surface = canvas.new_surface(&image_info, None)?;
         let surface_canvas = surface.canvas();
         surface_canvas.clear(skia_safe::Color::TRANSPARENT);
-        surface_canvas.draw_rrect(rounded_rect, &paint);
+        if is_all_round(&shadow_options.corner_shape) {
+            surface_canvas.draw_rrect(to_skia_rrect(&shape_rect, &outer_radius), &paint);
+        } else {
+            surface_canvas.draw_path(
+                &rounded_rect_path(&shape_rect, &outer_radius, shadow_options.corner_shape),
+                &paint,
+            );
+        }
         Some(surface.image_snapshot())
     }
 
@@ -152,12 +157,10 @@ impl<'a> SkiaItemRenderer<'a> {
             skia_safe::AlphaType::Premul,
         );
 
-        let geometry_rrect = to_skia_rrect(
-            &PhysicalRect::new(PhysicalPoint::zero(), PhysicalSize::new(width, height)),
-            &radius,
-        );
+        let geometry_rect =
+            PhysicalRect::new(PhysicalPoint::zero(), PhysicalSize::new(width, height));
 
-        // Inner "hole" rrect: geometry inset by spread on each side, translated by offset.
+        // Inner "hole" rect: geometry inset by spread on each side, translated by offset.
         let inner_rect = skia_safe::Rect::new(
             spread + offset_x,
             spread + offset_y,
@@ -165,12 +168,9 @@ impl<'a> SkiaItemRenderer<'a> {
             height - spread + offset_y,
         );
         let inner_radius = shadow_options.inner_radius();
-        let inner_rrect = to_skia_rrect(
-            &PhysicalRect::new(
-                PhysicalPoint::new(inner_rect.left, inner_rect.top),
-                PhysicalSize::new(inner_rect.width(), inner_rect.height()),
-            ),
-            &inner_radius,
+        let inner_phys_rect = PhysicalRect::new(
+            PhysicalPoint::new(inner_rect.left, inner_rect.top),
+            PhysicalSize::new(inner_rect.width(), inner_rect.height()),
         );
 
         // Outer rect inflated well beyond the geometry so its blurred edge falls outside the clip.
@@ -181,7 +181,14 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut path_builder = skia_safe::PathBuilder::new();
         path_builder.set_fill_type(skia_safe::PathFillType::EvenOdd);
         path_builder.add_rect(outer_rect, None, None);
-        path_builder.add_rrect(inner_rrect, None, None);
+        if is_all_round(&shadow_options.corner_shape) {
+            path_builder.add_rrect(to_skia_rrect(&inner_phys_rect, &inner_radius), None, None);
+        } else {
+            path_builder.add_path(
+                &rounded_rect_path(&inner_phys_rect, &inner_radius, shadow_options.corner_shape),
+                None,
+            );
+        }
         let path = path_builder.detach();
 
         let mut paint = crate::solid_paint(&shadow_options.color);
@@ -197,7 +204,15 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut surface = canvas.new_surface(&image_info, None)?;
         let surface_canvas = surface.canvas();
         surface_canvas.clear(skia_safe::Color::TRANSPARENT);
-        surface_canvas.clip_rrect(geometry_rrect, None, true);
+        if is_all_round(&shadow_options.corner_shape) {
+            surface_canvas.clip_rrect(to_skia_rrect(&geometry_rect, &radius), None, true);
+        } else {
+            surface_canvas.clip_path(
+                &rounded_rect_path(&geometry_rect, &radius, shadow_options.corner_shape),
+                skia_safe::ClipOp::Intersect,
+                true,
+            );
+        }
         surface_canvas.draw_path(&path, &paint);
         Some(surface.image_snapshot())
     }
@@ -552,29 +567,55 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         };
         let brush_width = layout.brush_size.width_length();
         let brush_height = layout.brush_size.height_length();
+        let all_round = is_all_round(&layout.corner_shape);
 
         if let Some(mut fill_paint) =
             self.brush_to_paint(rect.background(), brush_width, brush_height)
         {
-            let background_rect = to_skia_rrect(&layout.background_rect, &layout.background_radius);
             fill_paint.set_style(skia_safe::PaintStyle::Fill);
-            if !background_rect.is_rect() {
+            if all_round {
+                let background_rect =
+                    to_skia_rrect(&layout.background_rect, &layout.background_radius);
+                if !background_rect.is_rect() {
+                    fill_paint.set_anti_alias(true);
+                }
+                self.canvas.draw_rrect(background_rect, &fill_paint);
+            } else {
                 fill_paint.set_anti_alias(true);
+                self.canvas.draw_path(
+                    &rounded_rect_path(
+                        &layout.background_rect,
+                        &layout.background_radius,
+                        layout.corner_shape,
+                    ),
+                    &fill_paint,
+                );
             }
-            self.canvas.draw_rrect(background_rect, &fill_paint);
         }
 
         if layout.border_width.get() > 0.0
             && let Some(mut border_paint) =
                 self.brush_to_paint(layout.border_color, brush_width, brush_height)
         {
-            let border_rect = to_skia_rrect(&layout.border_rect, &layout.border_radius);
             border_paint.set_style(skia_safe::PaintStyle::Stroke);
             border_paint.set_stroke_width(layout.border_width.get());
-            if !border_rect.is_rect() {
+            if all_round {
+                let border_rect = to_skia_rrect(&layout.border_rect, &layout.border_radius);
+                if !border_rect.is_rect() {
+                    border_paint.set_anti_alias(true);
+                }
+                self.canvas.draw_rrect(border_rect, &border_paint);
+            } else {
                 border_paint.set_anti_alias(true);
+                self.canvas.draw_path(
+                    &rounded_rect_path(
+                        &layout.border_rect,
+                        &layout.border_radius,
+                        layout.corner_shape,
+                    ),
+                    &border_paint,
+                );
             }
-            self.canvas.draw_rrect(border_rect, &border_paint);
         }
     }
 
@@ -807,10 +848,23 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         }
     }
 
-    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
-        let rounded_rect =
-            to_skia_rrect(&(rect * self.scale_factor), &(radius * self.scale_factor));
-        self.canvas.clip_rrect(rounded_rect, None, true);
+    fn combine_clip(
+        &mut self,
+        rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        shape: i_slint_core::lengths::CornerShapes,
+    ) -> bool {
+        let phys_rect = rect * self.scale_factor;
+        let phys_radius = radius * self.scale_factor;
+        if is_all_round(&shape) {
+            self.canvas.clip_rrect(to_skia_rrect(&phys_rect, &phys_radius), None, true);
+        } else {
+            self.canvas.clip_path(
+                &rounded_rect_path(&phys_rect, &phys_radius, shape),
+                skia_safe::ClipOp::Intersect,
+                true,
+            );
+        }
         self.canvas.local_clip_bounds().is_some()
     }
 
@@ -1165,6 +1219,68 @@ pub fn to_skia_rrect(rect: &PhysicalRect, radius: &PhysicalBorderRadius) -> skia
             ],
         )
     }
+}
+
+/// Whether every corner is round, meaning Skia's native [`skia_safe::RRect`] (elliptical
+/// corners only) can draw it exactly, without going through [`rounded_rect_path`].
+pub fn is_all_round(corner_shape: &i_slint_core::lengths::CornerShapes) -> bool {
+    use i_slint_core::items::CornerShape::Round;
+    matches!(
+        (
+            corner_shape.top_left,
+            corner_shape.top_right,
+            corner_shape.bottom_right,
+            corner_shape.bottom_left,
+        ),
+        (Round, Round, Round, Round)
+    )
+}
+
+/// Builds the exact path for a rectangle whose corners aren't all round (see [`is_all_round`]).
+pub fn rounded_rect_path(
+    rect: &PhysicalRect,
+    radius: &PhysicalBorderRadius,
+    corner_shape: i_slint_core::lengths::CornerShapes,
+) -> skia_safe::Path {
+    let path = i_slint_core::graphics::corner_path::rounded_rect_path(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.width,
+        rect.size.height,
+        *radius,
+        corner_shape,
+    );
+
+    let mut builder = skia_safe::PathBuilder::new();
+    for event in path.iter() {
+        match event {
+            lyon_path::Event::Begin { at } => {
+                builder.move_to(to_skia_point(PhysicalPoint::from_untyped(at)));
+            }
+            lyon_path::Event::Line { from: _, to } => {
+                builder.line_to(to_skia_point(PhysicalPoint::from_untyped(to)));
+            }
+            lyon_path::Event::Quadratic { from: _, ctrl, to } => {
+                builder.quad_to(
+                    to_skia_point(PhysicalPoint::from_untyped(ctrl)),
+                    to_skia_point(PhysicalPoint::from_untyped(to)),
+                );
+            }
+            lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
+                builder.cubic_to(
+                    to_skia_point(PhysicalPoint::from_untyped(ctrl1)),
+                    to_skia_point(PhysicalPoint::from_untyped(ctrl2)),
+                    to_skia_point(PhysicalPoint::from_untyped(to)),
+                );
+            }
+            lyon_path::Event::End { last: _, first: _, close } => {
+                if close {
+                    builder.close();
+                }
+            }
+        }
+    }
+    builder.detach()
 }
 
 impl ItemRendererFeatures for SkiaItemRenderer<'_> {

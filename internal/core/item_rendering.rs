@@ -11,8 +11,8 @@ use crate::graphics::{
 use crate::item_tree::ItemTreeRc;
 use crate::item_tree::{ItemVisitor, ItemVisitorVTable, VisitChildrenResult};
 use crate::lengths::{
-    LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
-    PhysicalBorderRadius, PhysicalPx, ScaleFactor, SizeLengths,
+    CornerShapes, LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize,
+    LogicalVector, PhysicalBorderRadius, PhysicalPx, ScaleFactor, SizeLengths,
 };
 pub use crate::partial_renderer::CachedRenderingData;
 use crate::window::WindowAdapterRc;
@@ -343,6 +343,7 @@ pub trait RenderBorderRectangle {
     fn background(self: Pin<&Self>) -> Brush;
     fn border_width(self: Pin<&Self>) -> LogicalLength;
     fn border_radius(self: Pin<&Self>) -> LogicalBorderRadius;
+    fn border_corner_shape(self: Pin<&Self>) -> CornerShapes;
     fn border_color(self: Pin<&Self>) -> Brush;
 }
 
@@ -361,6 +362,9 @@ pub struct BorderRectLayout {
     pub border_rect: euclid::Rect<f32, PhysicalPx>,
     /// The corner radii of `border_rect`.
     pub border_radius: PhysicalBorderRadius,
+    /// The shape of each corner, shared by `background_rect` and `border_rect`: a shape
+    /// doesn't change as the radius is adjusted for the border inset.
+    pub corner_shape: CornerShapes,
     /// The stroke width of the border; zero for transparent borders.
     pub border_width: euclid::Length<f32, PhysicalPx>,
     /// The border brush.
@@ -418,6 +422,7 @@ impl BorderRectLayout {
             background_radius,
             border_rect: geometry,
             border_radius,
+            corner_shape: rect.border_corner_shape(),
             border_width,
             border_color,
         })
@@ -642,7 +647,8 @@ pub trait ItemRenderer {
         if clip_item.clip() {
             let (clip_rect, clip_radius) =
                 clip_content_box(size, clip_item.logical_border_radius(), clip_item.border_width());
-            let clip_region_valid = self.combine_clip(clip_rect, clip_radius);
+            let clip_region_valid =
+                self.combine_clip(clip_rect, clip_radius, clip_item.logical_corner_shape());
 
             // If clipping is enabled but the clip element is outside the visible range, then we don't
             // need to bother doing anything, not even rendering the children.
@@ -657,7 +663,12 @@ pub trait ItemRenderer {
     /// (FIXME: consider removing radius and have another function that take a path instead)
     /// Returns a boolean indicating the state of the new clip region: true if the clip region covers
     /// an area; false if the clip region is empty.
-    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool;
+    fn combine_clip(
+        &mut self,
+        rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        shape: CornerShapes,
+    ) -> bool;
     /// Get the current clip bounding box in the current transformed coordinate.
     fn get_current_clip(&self) -> LogicalRect;
 

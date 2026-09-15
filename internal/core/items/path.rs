@@ -133,7 +133,11 @@ impl Item for Path {
         let clip = self.clip();
         if clip {
             (*backend).save_state();
-            (*backend).combine_clip(size.into(), LogicalBorderRadius::zero());
+            (*backend).combine_clip(
+                size.into(),
+                LogicalBorderRadius::zero(),
+                crate::lengths::CornerShapes::default(),
+            );
         }
         (*backend).draw_path(self, self_rc, size);
         if clip {

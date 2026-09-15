@@ -14,7 +14,7 @@ use std::{
 use crate::items::ItemRc;
 use crate::{
     Color,
-    lengths::{PhysicalBorderRadius, PhysicalPx, RectLengths, ScaleFactor},
+    lengths::{CornerShapes, PhysicalBorderRadius, PhysicalPx, RectLengths, ScaleFactor},
 };
 
 /// Struct to store options affecting the rendering of a box shadow
@@ -30,6 +30,8 @@ pub struct BoxShadowOptions {
     pub blur: euclid::Length<f32, PhysicalPx>,
     /// The radii of the box shadow.
     pub radius: PhysicalBorderRadius,
+    /// The shape of each corner of the box shadow.
+    pub corner_shape: CornerShapes,
     /// The spread radius in physical pixels. Positive grows the shadow shape, negative shrinks it.
     pub spread: euclid::Length<f32, PhysicalPx>,
     /// Whether the shadow is rendered inside the element's geometry.
@@ -44,6 +46,7 @@ pub struct BoxShadowOptions {
 impl Eq for BoxShadowOptions {}
 impl Ord for BoxShadowOptions {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Two tuples rather than one: std only implements `PartialOrd` for tuples up to 12 elements.
         let lhs = (
             self.width,
             self.height,
@@ -72,9 +75,38 @@ impl Ord for BoxShadowOptions {
             other.offset_x_inset.to_bits(),
             other.offset_y_inset.to_bits(),
         );
+        // Order by variant index and, for `Superellipse`, its exponent bits.
+        fn corner_shape_key(shape: super::border_radius::CornerShape) -> (u32, u32) {
+            use super::border_radius::CornerShape;
+            match shape {
+                CornerShape::Round => (0, 0),
+                CornerShape::Squircle => (1, 0),
+                CornerShape::Bevel => (2, 0),
+                CornerShape::Scoop => (3, 0),
+                CornerShape::Notch => (4, 0),
+                CornerShape::Square => (5, 0),
+                CornerShape::Superellipse(k) => (6, k.to_bits()),
+            }
+        }
+        let lhs_shape = (
+            corner_shape_key(self.corner_shape.top_left),
+            corner_shape_key(self.corner_shape.top_right),
+            corner_shape_key(self.corner_shape.bottom_right),
+            corner_shape_key(self.corner_shape.bottom_left),
+        );
+        let rhs_shape = (
+            corner_shape_key(other.corner_shape.top_left),
+            corner_shape_key(other.corner_shape.top_right),
+            corner_shape_key(other.corner_shape.bottom_right),
+            corner_shape_key(other.corner_shape.bottom_left),
+        );
         if rhs < lhs {
             std::cmp::Ordering::Less
         } else if lhs < rhs {
+            std::cmp::Ordering::Greater
+        } else if rhs_shape < lhs_shape {
+            std::cmp::Ordering::Less
+        } else if lhs_shape < rhs_shape {
             std::cmp::Ordering::Greater
         } else {
             std::cmp::Ordering::Equal
@@ -163,6 +195,7 @@ impl BoxShadowOptions {
             color,
             blur: box_shadow.blur() * scale_factor, // This effectively becomes the blur radius, so scale to physical pixels
             radius: box_shadow.logical_border_radius() * scale_factor,
+            corner_shape: box_shadow.logical_corner_shape(),
             spread: box_shadow.spread() * scale_factor,
             inset,
             offset_x_inset,
