@@ -5,6 +5,7 @@ use super::*;
 
 use i_slint_core::graphics::IntSize;
 pub use i_slint_core::graphics::TexturePixelFormat;
+use i_slint_core::items::CornerShape;
 
 /// The pixel data of a for the source of a [`Texture`].
 #[derive(Clone)]
@@ -163,6 +164,15 @@ pub struct DrawRectangleArgs {
     pub bottom_right_radius: f32,
     /// The bottom-left radius.
     pub bottom_left_radius: f32,
+
+    /// The shape of the top-left corner.
+    pub top_left_corner_shape: CornerShape,
+    /// The shape of the top-right corner.
+    pub top_right_corner_shape: CornerShape,
+    /// The shape of the bottom-right corner.
+    pub bottom_right_corner_shape: CornerShape,
+    /// The shape of the bottom-left corner.
+    pub bottom_left_corner_shape: CornerShape,
 
     /// The width of the border.
     pub border_width: f32,
