@@ -1,0 +1,69 @@
+// Copyright © Klarälvdalens Datakonsult AB, a KDAB Group company , info@kdab.com, author Robin Cramer <robin.cramer@kdab.com>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
+
+// cSpell: ignore scanline
+
+// SIZE=224x184
+// ROTATION_THRESHOLD=255 disables the rotation check.
+// The software renderer walks a corner scanline by scanline, solving for the column
+// where the outline crosses each row. So rotating by 90 degrees anti-aliases the same
+// outline along the other axis. Shapes with a straight edge, such as bevel and notch,
+// differ by full contrast on those pixels.
+
+// Every corner shape at the same radius and border width, so that the shapes are told
+// apart by their outline alone. The border is a contrasting color over a filled
+// background, which shows that the fill reaches the same outline the border traces.
+//
+// The last row targets the corners individually: a different shape per corner, and shapes
+// combined with per-corner radii.
+
+export component TestCase inherits Window {
+    width: 224px;
+    height: 184px;
+
+    background: black;
+
+    GridLayout {
+        padding: 4px;
+        spacing: 4px;
+
+        Row {
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.round; }
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.squircle; }
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.bevel; }
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.scoop; }
+        }
+
+        Row {
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.notch; }
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.square; }
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.superellipse(1); }
+            Rectangle { background: #0a0f; border-radius: 16px; border-width: 5px; border-color: #d00f; border-corner-shape: CornerShape.superellipse(3); }
+        }
+
+        Row {
+            Rectangle {
+                background: #00af;
+                border-radius: 16px;
+                border-width: 5px;
+                border-color: #0d0f;
+                border-top-left-corner-shape: CornerShape.bevel;
+                border-top-right-corner-shape: CornerShape.scoop;
+                border-bottom-right-corner-shape: CornerShape.notch;
+                border-bottom-left-corner-shape: CornerShape.squircle;
+            }
+            Rectangle {
+                background: #00af;
+                border-width: 5px;
+                border-color: #0d0f;
+                border-top-left-radius: 20px;
+                border-bottom-right-radius: 8px;
+                border-corner-shape: CornerShape.bevel;
+            }
+            // A radius wider than half the box: every shape clamps to the same half-size.
+            Rectangle { background: #00af; border-radius: 40px; border-width: 5px; border-color: #0d0f; border-corner-shape: CornerShape.squircle; }
+            // No radius: the shape has nothing to cut, so every value looks square.
+            Rectangle { background: #00af; border-width: 5px; border-color: #0d0f; border-corner-shape: CornerShape.scoop; }
+        }
+    }
+}
