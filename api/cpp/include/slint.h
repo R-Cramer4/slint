@@ -119,6 +119,15 @@ inline bool operator==(const EasingCurve &a, const EasingCurve &b)
     }
     return true;
 }
+inline bool operator==(const CornerShape &a, const CornerShape &b)
+{
+    if (a.tag != b.tag) {
+        return false;
+    } else if (a.tag == CornerShape::Tag::Superellipse) {
+        return a.superellipse._0 == b.superellipse._0;
+    }
+    return true;
+}
 }
 
 namespace private_api {

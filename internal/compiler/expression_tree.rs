@@ -101,6 +101,7 @@ pub enum BuiltinFunction {
     Rgb,
     Hsv,
     Oklch,
+    CornerShapeSuperellipse,
     ColorScheme,
     AccentColor,
     SupportsNativeMenuBar,
@@ -187,6 +188,7 @@ pub enum BuiltinMacroFunction {
     ArrayIndexOf,
     CustomMouseCursor,
     Spring,
+    Superellipse,
 }
 
 macro_rules! declare_builtin_function_types {
@@ -303,6 +305,7 @@ declare_builtin_function_types!(
     Rgb: (Type::Int32, Type::Int32, Type::Int32, Type::Float32) -> Type::Color,
     Hsv: (Type::Float32, Type::Float32, Type::Float32, Type::Float32) -> Type::Color,
     Oklch: (Type::Float32, Type::Float32, Type::Float32, Type::Float32) -> Type::Color,
+    CornerShapeSuperellipse: (Type::Float32) -> Type::CornerShape,
     ColorScheme: () -> Type::Enumeration(
         typeregister::BUILTIN.enums.ColorScheme.clone(),
     ),
@@ -440,6 +443,7 @@ impl BuiltinFunction {
             BuiltinFunction::Rgb => true,
             BuiltinFunction::Hsv => true,
             BuiltinFunction::Oklch => true,
+            BuiltinFunction::CornerShapeSuperellipse => true,
             BuiltinFunction::SetTextInputFocused => false,
             BuiltinFunction::TextInputFocused => false,
             BuiltinFunction::ImplicitLayoutInfo(_) => false,
@@ -541,6 +545,7 @@ impl BuiltinFunction {
             BuiltinFunction::Rgb => true,
             BuiltinFunction::Hsv => true,
             BuiltinFunction::Oklch => true,
+            BuiltinFunction::CornerShapeSuperellipse => true,
             BuiltinFunction::ImplicitLayoutInfo(_) => true,
             BuiltinFunction::ItemAbsolutePosition => true,
             BuiltinFunction::SetTextInputFocused => false,
@@ -1037,6 +1042,8 @@ pub enum Expression {
         arg_name: SmolStr,
         expression: Box<Expression>,
     },
+
+    CornerShape(CornerShape),
 }
 
 impl Expression {
@@ -1165,6 +1172,7 @@ impl Expression {
             Expression::EmptyComponentFactory => Type::ComponentFactory,
             Expression::DebugHook { expression, .. } => expression.ty(),
             Expression::Closure { .. } => Type::Closure,
+            Expression::CornerShape(_) => Type::CornerShape,
         }
     }
 
@@ -1312,6 +1320,7 @@ impl Expression {
             Expression::EmptyComponentFactory => {}
             Expression::DebugHook { expression, .. } => visitor(expression),
             Expression::Closure { expression, .. } => visitor(expression),
+            Expression::CornerShape(_) => {}
         }
     }
 
@@ -1461,6 +1470,7 @@ impl Expression {
             Expression::EmptyComponentFactory => {}
             Expression::DebugHook { expression, .. } => visitor(expression),
             Expression::Closure { expression, .. } => visitor(expression),
+            Expression::CornerShape(_) => {}
         }
     }
 
@@ -1585,6 +1595,7 @@ impl Expression {
             Expression::EmptyComponentFactory => true,
             Expression::DebugHook { .. } => false,
             Expression::Closure { expression, .. } => expression.is_constant(ga),
+            Expression::CornerShape(_) => true,
         }
     }
 
@@ -1947,6 +1958,7 @@ impl Expression {
                 source_location: None,
             },
             Type::Closure => Expression::Invalid,
+            Type::CornerShape => Expression::CornerShape(CornerShape::default()),
         }
     }
 
@@ -2322,6 +2334,18 @@ pub enum EasingCurve {
     // Custom(Box<dyn Fn(f32)->f32>),
 }
 
+#[derive(Clone, Debug, Default)]
+pub enum CornerShape {
+    #[default]
+    Round,
+    Notch,
+    Scoop,
+    Bevel,
+    Squircle,
+    Square,
+    Superellipse(f32),
+}
+
 /// The compiled `mouse-cursor` value: either a built-in cursor or a custom one built from an
 /// image. Generic over the expression type so both the tree and the LLR reuse the same shape.
 #[derive(Clone, Debug)]
@@ -2628,5 +2652,6 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
             write!(f, "({display_name}) => ")?;
             pretty_print(f, expression)
         }
+        Expression::CornerShape(s) => write!(f, "{s:?}"),
     }
 }

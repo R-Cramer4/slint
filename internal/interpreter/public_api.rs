@@ -75,7 +75,8 @@ pub(crate) fn check_and_coerce(value: &mut Value, ty: &Type) -> bool {
         | Type::Callback(_)
         | Type::Function(_)
         | Type::ElementReference
-        | Type::Closure => false,
+        | Type::Closure
+        | Type::CornerShape => false,
         Type::Float32 | Type::Int32 => matches!(value, Value::Number(_)),
         Type::String => matches!(value, Value::String(_)),
         Type::Color | Type::Brush => matches!(value, Value::Brush(_)),

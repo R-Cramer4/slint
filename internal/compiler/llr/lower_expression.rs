@@ -235,6 +235,7 @@ pub fn lower_expression(
             arg_name: arg_name.clone(),
             expression: Box::new(lower_expression(expression, ctx)),
         },
+        tree_Expression::CornerShape(x) => llr_Expression::CornerShape(x.clone()),
     }
 }
 

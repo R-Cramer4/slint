@@ -467,6 +467,35 @@ where
     }
 }
 
+#[repr(C)]
+#[derive(Default, Debug, Clone, PartialEq, Copy)]
+/// Shape of a corner as defined by (x/a)^2^k + (y/b)^2^k = 1 (a superellipse)
+/// Where a and b are the sides of the rectangle, and k is a constant
+pub enum CornerShape {
+    #[default]
+    /// Same as just setting border radius, k = 1
+    Round,
+    /// k = -infinity
+    Notch,
+    /// k = -1, the inverse of Round
+    Scoop,
+    /// k = 0
+    Bevel,
+    /// k = 2
+    Squircle,
+    /// k = infinity
+    Square,
+    /// Custom k
+    Superellipse(f32),
+}
+
+impl ApproxEq<CornerShape> for CornerShape {
+    #[inline]
+    fn approx_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::lengths::{LogicalBorderRadius, LogicalLength, PhysicalPx, ScaleFactor};
