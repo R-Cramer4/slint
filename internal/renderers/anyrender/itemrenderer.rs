@@ -14,7 +14,7 @@ use i_slint_core::item_rendering::{
 };
 use i_slint_core::items::{self, FillRule, ImageFit, ImageRendering, ItemRc};
 use i_slint_core::lengths::{
-    LogicalBorderRadius, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
+    CornerShapes, LogicalBorderRadius, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
     PhysicalBorderRadius, ScaleFactor, logical_size_from_api,
 };
 use i_slint_core::textlayout::sharedparley::{self, GlyphRenderer, fontique, parley};
@@ -148,12 +148,13 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         };
 
         let transform = self.current_state.transform;
-        self.fill_with_brush(
+        self.fill_corner_shape_rect(
             rect.background(),
             layout.brush_size,
             transform,
-            peniko::Fill::default(),
-            &phys_rect_shape(layout.background_rect, layout.background_radius),
+            layout.background_rect,
+            layout.background_radius,
+            layout.corner_shape,
         );
 
         if layout.border_width.get() > 0.0 {
@@ -162,12 +163,14 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
             // uncovered.
             let stroke =
                 kurbo::Stroke::new(layout.border_width.get() as f64).with_join(kurbo::Join::Miter);
-            self.stroke_with_brush(
+            self.stroke_corner_shape_rect(
                 layout.border_color,
                 layout.brush_size,
                 transform,
                 &stroke,
-                &phys_rect_shape(layout.border_rect, layout.border_radius),
+                layout.border_rect,
+                layout.border_radius,
+                layout.corner_shape,
             );
         }
     }
@@ -514,6 +517,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         let spread = (box_shadow.spread() * sf).get() as f64;
         let blur = (box_shadow.blur() * sf).get().max(0.) as f64;
         let phys_size = size * sf;
+        let corner_shape = box_shadow.logical_corner_shape();
 
         // anyrender's box shadow takes one uniform corner radius,
         // so approximate per-corner radii with their average
@@ -530,6 +534,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
                 spread,
                 blur,
                 base_radius,
+                corner_shape,
                 to_kurbo_size(phys_size),
             );
             return;
@@ -548,18 +553,34 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         }
 
         if blur == 0. {
-            // No blur: a plain rounded rectangle fill matches exactly.
-            let shape = RectShape::uniform(rect, radius);
-            self.scene.fill(
-                peniko::Fill::default(),
-                self.current_state.transform,
-                peniko::BrushRef::Solid(to_peniko_color(color)),
-                None,
-                &shape,
-            );
+            // No blur: an exact rectangle fill matches, corners included.
+            if is_all_round(&corner_shape) {
+                self.scene.fill(
+                    peniko::Fill::default(),
+                    self.current_state.transform,
+                    peniko::BrushRef::Solid(to_peniko_color(color)),
+                    None,
+                    &RectShape::uniform(rect, radius),
+                );
+            } else {
+                let path = corner_shape_path(
+                    phys_rect_from_kurbo(rect),
+                    PhysicalBorderRadius::new_uniform(radius as f32),
+                    corner_shape,
+                );
+                self.scene.fill(
+                    peniko::Fill::default(),
+                    self.current_state.transform,
+                    peniko::BrushRef::Solid(to_peniko_color(color)),
+                    None,
+                    &path,
+                );
+            }
         } else {
             // The CSS drop-shadow convention Slint follows: the Gaussian's
             // standard deviation is half the blur radius.
+            // vello's box shadow primitive only supports a uniform circular
+            // radius, so `corner_shape` isn't reflected here (linebender/vello#1245).
             self.scene.draw_box_shadow(
                 self.current_state.transform,
                 rect,
@@ -574,9 +595,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         &mut self,
         clip_rect: LogicalRect,
         radius: LogicalBorderRadius,
-        // TODO: anyrender only clips to a circular-radius rounded rect.
-        // Other corner shapes aren't reflected in the clip region.
-        _shape: i_slint_core::lengths::CornerShapes,
+        shape: CornerShapes,
     ) -> bool {
         let clip = &mut self.current_state.clip_rect;
         let clip_region_valid = match clip.intersection(&clip_rect) {
@@ -590,9 +609,17 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
             }
         };
 
-        let clip_shape = phys_rect_shape(clip_rect * self.scale_factor, radius * self.scale_factor);
-
-        self.scene.push_clip_layer(self.current_state.transform, &clip_shape);
+        let phys_rect = clip_rect * self.scale_factor;
+        let phys_radius = radius * self.scale_factor;
+        if is_all_round(&shape) {
+            self.scene.push_clip_layer(
+                self.current_state.transform,
+                &phys_rect_shape(phys_rect, phys_radius),
+            );
+        } else {
+            let clip_path = corner_shape_path(phys_rect, phys_radius, shape);
+            self.scene.push_clip_layer(self.current_state.transform, &clip_path);
+        }
         self.current_state.layer_count += 1;
 
         clip_region_valid
@@ -835,16 +862,28 @@ impl<'a, S: PaintScene> AnyrenderItemRenderer<'a, S> {
         spread: f64,
         blur: f64,
         base_radius: f64,
+        corner_shape: CornerShapes,
         size: kurbo::Size,
     ) {
         let border_rect = kurbo::Rect::new(0., 0., size.width, size.height);
         if border_rect.is_zero_area() {
             return;
         }
-        let border_shape = RectShape::uniform(border_rect, base_radius);
 
         // The shadow must not paint outside the item.
-        self.scene.push_clip_layer(self.current_state.transform, &border_shape);
+        if is_all_round(&corner_shape) {
+            self.scene.push_clip_layer(
+                self.current_state.transform,
+                &RectShape::uniform(border_rect, base_radius),
+            );
+        } else {
+            let border_path = corner_shape_path(
+                phys_rect_from_kurbo(border_rect),
+                PhysicalBorderRadius::new_uniform(base_radius as f32),
+                corner_shape,
+            );
+            self.scene.push_clip_layer(self.current_state.transform, &border_path);
+        }
         self.scene.fill(
             peniko::Fill::default(),
             self.current_state.transform,
@@ -876,14 +915,30 @@ impl<'a, S: PaintScene> AnyrenderItemRenderer<'a, S> {
             // clear of shadow, regardless of the shadow color's alpha.
             let opaque = peniko::color::palette::css::BLACK;
             if blur == 0. {
-                self.scene.fill(
-                    peniko::Fill::default(),
-                    self.current_state.transform,
-                    peniko::BrushRef::Solid(opaque),
-                    None,
-                    &RectShape::uniform(interior, interior_radius),
-                );
+                if is_all_round(&corner_shape) {
+                    self.scene.fill(
+                        peniko::Fill::default(),
+                        self.current_state.transform,
+                        peniko::BrushRef::Solid(opaque),
+                        None,
+                        &RectShape::uniform(interior, interior_radius),
+                    );
+                } else {
+                    let path = corner_shape_path(
+                        phys_rect_from_kurbo(interior),
+                        PhysicalBorderRadius::new_uniform(interior_radius as f32),
+                        corner_shape,
+                    );
+                    self.scene.fill(
+                        peniko::Fill::default(),
+                        self.current_state.transform,
+                        peniko::BrushRef::Solid(opaque),
+                        None,
+                        &path,
+                    );
+                }
             } else {
+                // vello's box shadow primitive is circular-radius only; see the note in `draw_box_shadow`.
                 self.scene.draw_box_shadow(
                     self.current_state.transform,
                     interior,
@@ -941,6 +996,67 @@ impl<'a, S: PaintScene> AnyrenderItemRenderer<'a, S> {
                 peniko::BrushRef::from(&brush),
                 brush_transform,
                 shape,
+            );
+        }
+    }
+
+    /// Like [`Self::fill_with_brush`], but for `rect`/`radius`, honoring `corner_shape`.
+    /// Falls back to the native circular rounded-rect fast path when every corner is `Round`.
+    fn fill_corner_shape_rect(
+        &mut self,
+        brush: Brush,
+        brush_size: PhysicalSize,
+        transform: kurbo::Affine,
+        rect: PhysicalRect,
+        radius: PhysicalBorderRadius,
+        corner_shape: CornerShapes,
+    ) {
+        if is_all_round(&corner_shape) {
+            self.fill_with_brush(
+                brush,
+                brush_size,
+                transform,
+                peniko::Fill::default(),
+                &phys_rect_shape(rect, radius),
+            );
+        } else {
+            self.fill_with_brush(
+                brush,
+                brush_size,
+                transform,
+                peniko::Fill::default(),
+                &corner_shape_path(rect, radius, corner_shape),
+            );
+        }
+    }
+
+    /// Like [`Self::stroke_with_brush`], but for `rect`/`radius`, honoring `corner_shape`.
+    /// See [`Self::fill_corner_shape_rect`].
+    fn stroke_corner_shape_rect(
+        &mut self,
+        brush: Brush,
+        brush_size: PhysicalSize,
+        transform: kurbo::Affine,
+        stroke: &kurbo::Stroke,
+        rect: PhysicalRect,
+        radius: PhysicalBorderRadius,
+        corner_shape: CornerShapes,
+    ) {
+        if is_all_round(&corner_shape) {
+            self.stroke_with_brush(
+                brush,
+                brush_size,
+                transform,
+                stroke,
+                &phys_rect_shape(rect, radius),
+            );
+        } else {
+            self.stroke_with_brush(
+                brush,
+                brush_size,
+                transform,
+                stroke,
+                &corner_shape_path(rect, radius, corner_shape),
             );
         }
     }
@@ -1056,6 +1172,67 @@ fn to_kurbo_rect(rect: PhysicalRect) -> kurbo::Rect {
 
 fn to_kurbo_size(size: PhysicalSize) -> kurbo::Size {
     kurbo::Size::new(size.width as f64, size.height as f64)
+}
+
+fn phys_rect_from_kurbo(rect: kurbo::Rect) -> PhysicalRect {
+    PhysicalRect::new(
+        PhysicalPoint::new(rect.x0 as f32, rect.y0 as f32),
+        PhysicalSize::new(rect.width() as f32, rect.height() as f32),
+    )
+}
+
+/// Whether every corner is round, meaning `kurbo`'s native rect/rounded-rect
+/// primitives (elliptical corners only) can draw it exactly, without going
+/// through [`corner_shape_path`].
+fn is_all_round(corner_shape: &CornerShapes) -> bool {
+    use i_slint_core::items::CornerShape::Round;
+    matches!(
+        (
+            corner_shape.top_left,
+            corner_shape.top_right,
+            corner_shape.bottom_right,
+            corner_shape.bottom_left,
+        ),
+        (Round, Round, Round, Round)
+    )
+}
+
+/// Builds the exact path for a rectangle whose corners aren't all round (see [`is_all_round`]).
+fn corner_shape_path(
+    rect: PhysicalRect,
+    radius: PhysicalBorderRadius,
+    corner_shape: CornerShapes,
+) -> kurbo::BezPath {
+    let path = i_slint_core::graphics::corner_path::rounded_rect_path(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.width,
+        rect.size.height,
+        radius,
+        corner_shape,
+    );
+
+    let mut bez_path = kurbo::BezPath::new();
+    for event in path.iter() {
+        match event {
+            lyon_path::Event::Begin { at } => bez_path.move_to((at.x as f64, at.y as f64)),
+            lyon_path::Event::Line { from: _, to } => bez_path.line_to((to.x as f64, to.y as f64)),
+            lyon_path::Event::Quadratic { from: _, ctrl, to } => {
+                bez_path.quad_to((ctrl.x as f64, ctrl.y as f64), (to.x as f64, to.y as f64))
+            }
+            lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => bez_path.curve_to(
+                (ctrl1.x as f64, ctrl1.y as f64),
+                (ctrl2.x as f64, ctrl2.y as f64),
+                (to.x as f64, to.y as f64),
+            ),
+            lyon_path::Event::End { last: _, first: _, close } => {
+                if close {
+                    bez_path.close_path();
+                }
+            }
+        }
+    }
+    bez_path
 }
 
 fn phys_rect_shape(rect: PhysicalRect, radius: PhysicalBorderRadius) -> RectShape {
