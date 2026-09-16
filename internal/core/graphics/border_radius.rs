@@ -508,6 +508,9 @@ impl ApproxEq<CornerShape> for CornerShape {
     }
 }
 
+/// The shape of each of the four corners, in the same order as [`BorderRadius`].
+pub type CornerShapes = BorderRadius<CornerShape, ()>;
+
 #[cfg(test)]
 mod tests {
     use crate::lengths::{LogicalBorderRadius, LogicalLength, PhysicalPx, ScaleFactor};

@@ -1127,7 +1127,12 @@ impl ItemRenderer for QtItemRenderer<'_> {
         }
     }
 
-    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        _shape: i_slint_core::graphics::CornerShapes,
+    ) -> bool {
         let clip_rect = qttypes::QRectF {
             x: rect.min_x() as _,
             y: rect.min_y() as _,

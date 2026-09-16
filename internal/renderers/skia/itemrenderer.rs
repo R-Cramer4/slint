@@ -824,7 +824,12 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         }
     }
 
-    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        _shape: i_slint_core::graphics::CornerShapes,
+    ) -> bool {
         let rounded_rect =
             to_skia_rrect(&(rect * self.scale_factor), &(radius * self.scale_factor));
         self.canvas.clip_rrect(rounded_rect, None, true);

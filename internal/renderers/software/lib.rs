@@ -3330,7 +3330,12 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
         // TODO
     }
 
-    fn combine_clip(&mut self, other: LogicalRect, _radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        other: LogicalRect,
+        _radius: LogicalBorderRadius,
+        _shape: i_slint_core::graphics::CornerShapes,
+    ) -> bool {
         match self.current_state.clip.intersection(&other) {
             Some(r) => {
                 self.current_state.clip = r;

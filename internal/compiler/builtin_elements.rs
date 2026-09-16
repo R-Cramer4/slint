@@ -626,6 +626,10 @@ fn build(l: &mut Loader) {
         /// The size of the radius. This single value is applied to all four corners.
         /// \default 0
         in property <length> border-radius;
+        /// The shape of all four corners, sized by the border radius.
+        /// See <Link type="corner-shape" label="corner-shape" /> for the available shapes.
+        /// \default round
+        in property <corner-shape> border-corner-shape;
     } }
 
     item! { BorderRectangle: BasicBorderRectangle {
@@ -638,6 +642,14 @@ fn build(l: &mut Loader) {
         in property <length> border-bottom-left-radius;
         ///
         in property <length> border-bottom-right-radius;
+        /// The shape of the top left corner.
+        in property <corner-shape> border-top-left-corner-shape;
+        /// The shape of the top right corner.
+        in property <corner-shape> border-top-right-corner-shape;
+        /// The shape of the bottom left corner.
+        in property <corner-shape> border-bottom-left-corner-shape;
+        /// The shape of the bottom right corner.
+        in property <corner-shape> border-bottom-right-corner-shape;
         //! ## Drop Shadows
         //!
         //! To achieve the graphical effect of a visually elevated shape that shows a shadow effect underneath the frame of
@@ -2232,6 +2244,10 @@ fn build(l: &mut Loader) {
         in property <length> border-top-right-radius;
         in property <length> border-bottom-left-radius;
         in property <length> border-bottom-right-radius;
+        in property <corner-shape> border-top-left-corner-shape;
+        in property <corner-shape> border-top-right-corner-shape;
+        in property <corner-shape> border-bottom-left-corner-shape;
+        in property <corner-shape> border-bottom-right-corner-shape;
         in property <length> offset-x;
         in property <length> offset-y;
         in property <color> color;
@@ -2408,6 +2424,10 @@ fn build(l: &mut Loader) {
         in property <length> border-top-right-radius;
         in property <length> border-bottom-left-radius;
         in property <length> border-bottom-right-radius;
+        in property <corner-shape> border-top-left-corner-shape;
+        in property <corner-shape> border-top-right-corner-shape;
+        in property <corner-shape> border-bottom-left-corner-shape;
+        in property <corner-shape> border-bottom-right-corner-shape;
         in property <length> border-width;
         in property <bool> clip;
         in property <bool> is-visibility-clip;
