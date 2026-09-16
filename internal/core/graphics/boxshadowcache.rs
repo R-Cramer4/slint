@@ -147,14 +147,31 @@ impl BoxShadowOptions {
         euclid::point2(self.blur.get(), self.blur.get())
     }
 
-    /// The corner radii of the shadow shape: `max(0, radius + spread)`.
+    /// The corner radii of the shadow shape: `max(0, radius + spread * scale)`, `scale`
+    /// from [`CornerShape::spread_scale`].
     pub fn outer_radius(&self) -> PhysicalBorderRadius {
-        (self.radius + PhysicalBorderRadius::new_uniform(self.spread.get())).max(Default::default())
+        self.offset_radius(self.spread.get())
     }
 
-    /// The corner radii of the hole an inset shadow leaves: `max(0, radius - spread)`.
+    /// The corner radii of the hole an inset shadow leaves: [`Self::outer_radius`] with the
+    /// spread negated.
     pub fn inner_radius(&self) -> PhysicalBorderRadius {
-        (self.radius - PhysicalBorderRadius::new_uniform(self.spread.get())).max(Default::default())
+        self.offset_radius(-self.spread.get())
+    }
+
+    /// `radius` moved outward by `delta` per corner, scaled by [`CornerShape::spread_scale`]
+    /// and clamped to zero. A corner with no radius stays sharp, per CSS's `box-shadow`
+    /// spread.
+    fn offset_radius(&self, delta: f32) -> PhysicalBorderRadius {
+        let corner = |r: f32, shape: super::border_radius::CornerShape| {
+            if r > 0. { (r + delta * shape.spread_scale()).max(0.) } else { 0. }
+        };
+        PhysicalBorderRadius::new(
+            corner(self.radius.top_left, self.corner_shape.top_left),
+            corner(self.radius.top_right, self.corner_shape.top_right),
+            corner(self.radius.bottom_right, self.corner_shape.bottom_right),
+            corner(self.radius.bottom_left, self.corner_shape.bottom_left),
+        )
     }
 
     /// The Gaussian sigma corresponding to the CSS blur radius.

@@ -499,6 +499,24 @@ impl ApproxEq<CornerShape> for CornerShape {
     }
 }
 
+impl CornerShape {
+    /// The `scale` in `radius + spread * scale`, chosen so a spread's visible ring stays a
+    /// uniform width all the way around. `Round` grows tangentially, so it alone gets `1`;
+    /// `Notch`'s sharp corner doesn't move at all, so it gets `0`. See
+    /// docs/development/corner-shape-spread.md for the derivation.
+    pub fn spread_scale(self) -> f32 {
+        match self {
+            CornerShape::Square | CornerShape::Notch => 0.0,
+            CornerShape::Round => 1.0,
+            CornerShape::Scoop => core::f32::consts::SQRT_2 - 1.0,
+            CornerShape::Bevel => 2.0 - core::f32::consts::SQRT_2,
+            // Unused: callers draw these two as an exact offset curve instead.
+            CornerShape::Squircle => 1.0,
+            CornerShape::Superellipse(_) => 1.0,
+        }
+    }
+}
+
 /// The CSS `corner-shape: superellipse(k)` parameter that renders
 /// [`CornerShape::Squircle`](crate::items::CornerShape::Squircle).
 pub const SQUIRCLE_K: f32 = 2.0;
