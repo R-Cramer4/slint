@@ -179,6 +179,66 @@ impl BoxShadowOptions {
         self.blur.get() / 2.
     }
 
+    /// The rectangle of the hole an inset shadow's shape leaves in
+    /// [`Self::inset_shadow_ring_path`]: the geometry inset by `spread` on each side,
+    /// translated by the inset offset.
+    #[cfg(feature = "path")]
+    pub fn inset_hole_rect(&self) -> euclid::Rect<f32, PhysicalPx> {
+        let spread = self.spread.get();
+        euclid::Rect::new(
+            euclid::Point2D::new(spread + self.offset_x_inset, spread + self.offset_y_inset),
+            euclid::Size2D::new(
+                (self.width.get() - 2. * spread).max(0.),
+                (self.height.get() - 2. * spread).max(0.),
+            ),
+        )
+    }
+
+    /// The path an inset shadow paints, before blur and clipping to the element's shape: an
+    /// outer rectangle inflated well past the geometry, so its edge stays hidden after
+    /// blurring, with [`Self::inset_hole_rect`] cut out of it.
+    /// Fill with the even-odd rule; the renderer then blurs it and clips to `width` x
+    /// `height` with `radius`/`corner_shape`.
+    #[cfg(feature = "path")]
+    pub fn inset_shadow_ring_path(&self) -> lyon_path::Path {
+        let width = self.width.get();
+        let height = self.height.get();
+        let spread = self.spread.get();
+        // Far enough out that the outer edge stays outside the geometry even after the blur,
+        // an offset hole, or a negative spread.
+        let inflate = self.blur.get()
+            + spread.abs()
+            + self.offset_x_inset.abs()
+            + self.offset_y_inset.abs()
+            + 16.;
+
+        let mut outer = lyon_path::Path::builder().with_svg();
+        outer.move_to(lyon_path::math::point(-inflate, -inflate));
+        outer.line_to(lyon_path::math::point(width + inflate, -inflate));
+        outer.line_to(lyon_path::math::point(width + inflate, height + inflate));
+        outer.line_to(lyon_path::math::point(-inflate, height + inflate));
+        outer.close();
+        let outer = outer.build();
+
+        // The hole shrinks by `spread`, mirroring how a drop shadow's shape grows: negative-spread
+        // `spread_rounded_rect_path` is the exact offset curve, unlike `rounded_rect_path` at
+        // `inner_radius`'s scaled radius.
+        let hole = self.inset_hole_rect();
+        let hole = super::corner_path::spread_rounded_rect_path(
+            hole.origin.x,
+            hole.origin.y,
+            hole.size.width,
+            hole.size.height,
+            self.radius,
+            self.corner_shape,
+            -spread,
+        );
+
+        let mut builder = lyon_path::Path::builder();
+        builder.extend_from_paths(&[outer.as_slice(), hole.as_slice()]);
+        builder.build()
+    }
+
     /// Extracts the rendering specific properties from the BoxShadow item and scales the logical
     /// coordinates to physical pixels used in the BoxShadowOptions. Returns None if for example the
     /// alpha on the box shadow would imply that no shadow is to be rendered.

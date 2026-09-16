@@ -127,7 +127,7 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut surface = canvas.new_surface(&image_info, None)?;
         let surface_canvas = surface.canvas();
         surface_canvas.clear(skia_safe::Color::TRANSPARENT);
-        if is_all_round(&shadow_options.corner_shape) {
+        if shadow_options.corner_shape.is_all_round() {
             surface_canvas
                 .draw_rrect(to_skia_rrect(&shape_rect, &shadow_options.outer_radius()), &paint);
         } else {
@@ -154,10 +154,7 @@ impl<'a> SkiaItemRenderer<'a> {
             return None;
         }
         let blur = shadow_options.blur.get();
-        let spread = shadow_options.spread.get();
         let radius = shadow_options.radius;
-        let offset_x = shadow_options.offset_x_inset;
-        let offset_y = shadow_options.offset_y_inset;
 
         // Image is sized to the rectangle's geometry; the geometry rrect serves as the clip so the
         // outer blurred edge stays hidden.
@@ -171,47 +168,8 @@ impl<'a> SkiaItemRenderer<'a> {
         let geometry_rect =
             PhysicalRect::new(PhysicalPoint::zero(), PhysicalSize::new(width, height));
 
-        // Inner "hole" rect: geometry inset by spread on each side, translated by offset.
-        let inner_rect = skia_safe::Rect::new(
-            spread + offset_x,
-            spread + offset_y,
-            width - spread + offset_x,
-            height - spread + offset_y,
-        );
-        let inner_phys_rect = PhysicalRect::new(
-            PhysicalPoint::new(inner_rect.left, inner_rect.top),
-            PhysicalSize::new(inner_rect.width(), inner_rect.height()),
-        );
-
-        // Outer rect inflated well beyond the geometry so its blurred edge falls outside the clip.
-        let inflate = blur + spread.abs() + offset_x.abs() + offset_y.abs() + 16.;
-        let outer_rect =
-            skia_safe::Rect::new(-inflate, -inflate, width + inflate, height + inflate);
-
-        let mut path_builder = skia_safe::PathBuilder::new();
-        path_builder.set_fill_type(skia_safe::PathFillType::EvenOdd);
-        path_builder.add_rect(outer_rect, None, None);
-        if is_all_round(&shadow_options.corner_shape) {
-            path_builder.add_rrect(
-                to_skia_rrect(&inner_phys_rect, &shadow_options.inner_radius()),
-                None,
-                None,
-            );
-        } else {
-            // The hole shrinks by `spread`, mirroring how the shape above grows: negative-spread
-            // `spread_rounded_rect_path` is the exact offset curve, unlike `rounded_rect_path`
-            // at `inner_radius`'s scaled radius.
-            path_builder.add_path(
-                &spread_rounded_rect_path(
-                    &inner_phys_rect,
-                    &radius,
-                    shadow_options.corner_shape,
-                    -spread,
-                ),
-                None,
-            );
-        }
-        let path = path_builder.detach();
+        let mut path = to_skia_path(&shadow_options.inset_shadow_ring_path());
+        path.set_fill_type(skia_safe::PathFillType::EvenOdd);
 
         let mut paint = crate::solid_paint(&shadow_options.color);
         paint.set_anti_alias(true);
@@ -226,7 +184,7 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut surface = canvas.new_surface(&image_info, None)?;
         let surface_canvas = surface.canvas();
         surface_canvas.clear(skia_safe::Color::TRANSPARENT);
-        if is_all_round(&shadow_options.corner_shape) {
+        if shadow_options.corner_shape.is_all_round() {
             surface_canvas.clip_rrect(to_skia_rrect(&geometry_rect, &radius), None, true);
         } else {
             surface_canvas.clip_path(
@@ -590,7 +548,7 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         };
         let brush_width = layout.brush_size.width_length();
         let brush_height = layout.brush_size.height_length();
-        let all_round = is_all_round(&layout.corner_shape);
+        let all_round = layout.corner_shape.is_all_round();
 
         if let Some(mut fill_paint) =
             self.brush_to_paint(rect.background(), brush_width, brush_height)
@@ -879,7 +837,7 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
     ) -> bool {
         let phys_rect = rect * self.scale_factor;
         let phys_radius = radius * self.scale_factor;
-        if is_all_round(&shape) {
+        if shape.is_all_round() {
             self.canvas.clip_rrect(to_skia_rrect(&phys_rect, &phys_radius), None, true);
         } else {
             self.canvas.clip_path(
@@ -1255,22 +1213,8 @@ pub fn to_skia_rrect(rect: &PhysicalRect, radius: &PhysicalBorderRadius) -> skia
     }
 }
 
-/// Whether every corner is round, meaning Skia's native [`skia_safe::RRect`] (elliptical
-/// corners only) can draw it exactly, without going through [`rounded_rect_path`].
-pub fn is_all_round(corner_shape: &i_slint_core::lengths::CornerShapes) -> bool {
-    use i_slint_core::items::CornerShape::Round;
-    matches!(
-        (
-            corner_shape.top_left,
-            corner_shape.top_right,
-            corner_shape.bottom_right,
-            corner_shape.bottom_left,
-        ),
-        (Round, Round, Round, Round)
-    )
-}
-
-/// Builds the exact path for a rectangle whose corners aren't all round (see [`is_all_round`]).
+/// Builds the exact path for a rectangle whose corners aren't all round (see
+/// [`CornerShapes::is_all_round`](i_slint_core::lengths::CornerShapes::is_all_round)).
 pub fn rounded_rect_path(
     rect: &PhysicalRect,
     radius: &PhysicalBorderRadius,

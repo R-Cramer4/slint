@@ -499,6 +499,17 @@ impl ApproxEq<CornerShape> for CornerShape {
     }
 }
 
+impl BorderRadius<CornerShape, ()> {
+    /// Whether every corner is round, meaning a renderer's native rounded-rect primitive
+    /// (elliptical corners only) can draw it exactly, without a general corner-shape path.
+    pub fn is_all_round(&self) -> bool {
+        matches!(
+            (self.top_left, self.top_right, self.bottom_right, self.bottom_left),
+            (CornerShape::Round, CornerShape::Round, CornerShape::Round, CornerShape::Round)
+        )
+    }
+}
+
 impl CornerShape {
     /// The `scale` in `radius + spread * scale`, chosen so a spread's visible ring stays a
     /// uniform width all the way around. `Round` grows tangentially, so it alone gets `1`;
