@@ -655,6 +655,24 @@ pub fn default_value_for_type(ty: &Type) -> Value {
         | Type::ArrayOfU16
         | Type::LayoutCache
         | Type::Closure => Value::Void,
+        Type::CornerShape => Value::CornerShape(Default::default()),
+    }
+}
+
+/// The runtime value of a compiled `corner-shape` literal.
+pub fn corner_shape(
+    shape: &i_slint_compiler::expression_tree::CornerShape,
+) -> i_slint_core::graphics::CornerShape {
+    use i_slint_compiler::expression_tree::CornerShape as CS;
+    use i_slint_core::graphics::CornerShape as Core;
+    match shape {
+        CS::Round => Core::Round,
+        CS::Notch => Core::Notch,
+        CS::Scoop => Core::Scoop,
+        CS::Bevel => Core::Bevel,
+        CS::Square => Core::Square,
+        CS::Squircle => Core::Squircle,
+        CS::Superellipse(k) => Core::Superellipse(*k),
     }
 }
 
@@ -1115,6 +1133,7 @@ pub fn eval_expression(ctx: &mut EvalContext, expression: &Expression) -> Value 
             }
             eval_expression(ctx, expression)
         }
+        Expression::CornerShape(shape) => Value::CornerShape(corner_shape(shape)),
     }
 }
 
@@ -2288,6 +2307,10 @@ fn call_builtin_function(
                 h,
                 a.clamp(0.0, 1.0),
             )))
+        }
+        BuiltinFunction::CornerShapeSuperellipse => {
+            let k: f32 = eval_expression(ctx, &arguments[0]).try_into().unwrap_or(0.0);
+            Value::CornerShape(i_slint_core::graphics::CornerShape::Superellipse(k))
         }
         BuiltinFunction::AnimationTick => {
             Value::Number(i_slint_core::animations::animation_tick() as f64)
