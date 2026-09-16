@@ -15,7 +15,7 @@ Some convention used in the generated code:
 use super::accessor_names::{self, AccessorKind};
 use crate::CompilerConfiguration;
 use crate::diagnostics::SourceLocation;
-use crate::expression_tree::{BuiltinFunction, EasingCurve, MinMaxOp, OperatorClass};
+use crate::expression_tree::{BuiltinFunction, CornerShape, EasingCurve, MinMaxOp, OperatorClass};
 use crate::langtype::{Enumeration, EnumerationValue, Struct, StructName, Type};
 use crate::layout::Orientation;
 use crate::llr::lower_expression::lower_constant_expression;
@@ -135,6 +135,7 @@ pub fn rust_primitive_type(ty: &Type) -> Option<proc_macro2::TokenStream> {
                 u16,
             >
         )),
+        Type::CornerShape => Some(quote!(sp::CornerShape)),
         _ => None,
     }
 }
@@ -144,6 +145,7 @@ fn rust_property_type(ty: &Type) -> Option<proc_macro2::TokenStream> {
         Type::LogicalLength => Some(quote!(sp::LogicalLength)),
         Type::Easing => Some(quote!(sp::EasingCurve)),
         Type::MouseCursor => Some(quote!(sp::MouseCursorInner)),
+        Type::CornerShape => Some(quote!(sp::CornerShape)),
         _ => rust_primitive_type(ty),
     }
 }
@@ -3558,7 +3560,8 @@ fn compile_expression_to_value(expr: &Expression, ctx: &EvaluationContext) -> To
             | Expression::RadialGradient { .. }
             | Expression::ConicGradient { .. }
             | Expression::EnumerationValue(..)
-            | Expression::Closure { .. } => true,
+            | Expression::Closure { .. }
+            | Expression::CornerShape(..) => true,
             Expression::Condition { true_expr, false_expr, .. } => {
                 produces_owned_value(true_expr) && produces_owned_value(false_expr)
             }
@@ -3865,6 +3868,13 @@ fn compile_expression(expr: &Expression, ctx: &EvaluationContext) -> TokenStream
         }
         // Generated code has no debug hooks; use the wrapped expression.
         Expression::DebugHook { expression, .. } => compile_expression(expression, ctx),
+        Expression::CornerShape(CornerShape::Superellipse(a)) => {
+            quote!(sp::CornerShape::Superellipse(#a))
+        }
+        Expression::CornerShape(e) => {
+            let ident = format_ident!("{e:?}");
+            quote!(sp::CornerShape::#ident)
+        }
     }
 }
 
@@ -5136,6 +5146,10 @@ fn compile_builtin_function_call(
                 let alpha: f32 = (#alpha as f32).max(0.).min(1.) as f32;
                 sp::Color::from_oklch(l, c, #h as f32, alpha)
             })
+        }
+        BuiltinFunction::CornerShapeSuperellipse => {
+            let k = a.next().unwrap();
+            quote!(sp::CornerShape::Superellipse(#k as f32))
         }
         BuiltinFunction::ColorScheme => {
             // A `Palette.color-scheme` binding inside a SystemTrayIcon-rooted component

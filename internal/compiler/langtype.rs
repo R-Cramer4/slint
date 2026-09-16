@@ -76,6 +76,7 @@ pub enum Type {
     StyledText,
     MouseCursor,
     Closure,
+    CornerShape,
 }
 
 impl core::cmp::PartialEq for Type {
@@ -122,6 +123,7 @@ impl core::cmp::PartialEq for Type {
             Type::StyledText => matches!(other, Type::StyledText),
             Type::DataTransfer => matches!(other, Type::DataTransfer),
             Type::Closure => matches!(other, Type::Closure),
+            Type::CornerShape => matches!(other, Type::CornerShape),
         }
     }
 }
@@ -183,6 +185,7 @@ impl Display for Type {
             Type::ArrayOfU16 => write!(f, "[u16]"),
             Type::StyledText => write!(f, "styled-text"),
             Type::Closure => write!(f, "closure"),
+            Type::CornerShape => write!(f, "corner-shape"),
         }
     }
 }
@@ -231,6 +234,7 @@ impl Type {
                 | Self::Easing
                 | Self::MouseCursor
                 | Self::Enumeration(_)
+                | Self::CornerShape
                 | Self::Keys
                 | Self::DataTransfer
                 | Self::ElementReference
@@ -346,6 +350,7 @@ impl Type {
             Type::ArrayOfU16 => None,
             Type::StyledText => None,
             Type::Closure => None,
+            Type::CornerShape => None,
         }
     }
 

@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::diagnostics::{BuildDiagnostics, Spanned};
 use crate::expression_tree::{
-    BuiltinFunction, BuiltinMacroFunction, Callable, EasingCurve, Expression, MouseCursorInner,
-    Unit,
+    BuiltinFunction, BuiltinMacroFunction, Callable, CornerShape, EasingCurve, Expression,
+    MouseCursorInner, Unit,
 };
 use crate::langtype::{ElementType, Enumeration, EnumerationValue, PropertyLookupMode, Type};
 use crate::namedreference::NamedReference;
@@ -188,6 +188,7 @@ pub enum BuiltinNamespace {
     FontWeight,
     MouseCursor,
     SlintInternal,
+    CornerShape,
 }
 
 impl From<Expression> for LookupResult {
@@ -277,6 +278,9 @@ impl LookupObject for LookupResult {
             LookupResult::Namespace(BuiltinNamespace::SlintInternal) => {
                 SlintInternal.for_each_entry(ctx, f)
             }
+            LookupResult::Namespace(BuiltinNamespace::CornerShape) => {
+                CornerShapeSpecific.for_each_entry(ctx, f)
+            }
             LookupResult::Callable(..) => None,
         }
     }
@@ -299,6 +303,9 @@ impl LookupObject for LookupResult {
             }
             LookupResult::Namespace(BuiltinNamespace::SlintInternal) => {
                 SlintInternal.lookup(ctx, name)
+            }
+            LookupResult::Namespace(BuiltinNamespace::CornerShape) => {
+                CornerShapeSpecific.lookup(ctx, name)
             }
             LookupResult::Callable(..) => None,
         }
@@ -721,6 +728,7 @@ impl LookupObject for TypeSpecificLookup {
             Type::Easing if !sc => EasingSpecific.for_each_entry(ctx, f),
             Type::MouseCursor if !sc => MouseCursorSpecific.for_each_entry(ctx, f),
             Type::Enumeration(enumeration) => enumeration.clone().for_each_entry(ctx, f),
+            Type::CornerShape if !sc => CornerShapeSpecific.for_each_entry(ctx, f),
             _ => None,
         }
     }
@@ -732,6 +740,7 @@ impl LookupObject for TypeSpecificLookup {
             Type::Easing if !sc => EasingSpecific.lookup(ctx, name),
             Type::MouseCursor if !sc => MouseCursorSpecific.lookup(ctx, name),
             Type::Enumeration(enumeration) => enumeration.clone().lookup(ctx, name),
+            Type::CornerShape if !sc => CornerShapeSpecific.lookup(ctx, name),
             _ => None,
         }
     }
@@ -858,6 +867,27 @@ impl LookupObject for EasingSpecific {
             f(&SmolStr::new_static("cubic-bezier"), BuiltinMacroFunction::CubicBezier.into())
         })
         .or_else(|| f(&SmolStr::new_static("spring"), BuiltinMacroFunction::Spring.into()))
+    }
+}
+
+struct CornerShapeSpecific;
+impl LookupObject for CornerShapeSpecific {
+    fn for_each_entry<R>(
+        &self,
+        _ctx: &LookupCtx,
+        f: &mut impl FnMut(&SmolStr, LookupResult) -> Option<R>,
+    ) -> Option<R> {
+        let mut shape = |n, s| f(&SmolStr::new_static(n), Expression::CornerShape(s).into());
+        let r = None
+            .or_else(|| shape("notch", CornerShape::Notch))
+            .or_else(|| shape("scoop", CornerShape::Scoop))
+            .or_else(|| shape("bevel", CornerShape::Bevel))
+            .or_else(|| shape("round", CornerShape::Round))
+            .or_else(|| shape("squircle", CornerShape::Squircle))
+            .or_else(|| shape("square", CornerShape::Square));
+        r.or_else(|| {
+            f(&SmolStr::new_static("superellipse"), BuiltinMacroFunction::Superellipse.into())
+        })
     }
 }
 
@@ -1101,6 +1131,7 @@ impl LookupObject for BuiltinNamespaceLookup {
                 }
             })
             .or_else(|| f("MouseCursor", LookupResult::Namespace(BuiltinNamespace::MouseCursor)))
+            .or_else(|| f("CornerShape", LookupResult::Namespace(BuiltinNamespace::CornerShape)))
     }
 }
 

@@ -473,7 +473,7 @@ pub mod cpp_ast {
 }
 
 use crate::CompilerConfiguration;
-use crate::expression_tree::{BuiltinFunction, EasingCurve, MinMaxOp};
+use crate::expression_tree::{BuiltinFunction, CornerShape, EasingCurve, MinMaxOp};
 use crate::langtype::{
     BuiltinStruct, Enumeration, EnumerationValue, NativeClass, StructName, Type,
 };
@@ -578,6 +578,7 @@ impl CppType for Type {
             Type::Easing => Some("slint::cbindgen_private::EasingCurve".into()),
             Type::StyledText => Some("slint::StyledText".into()),
             Type::MouseCursor => Some("slint::cbindgen_private::MouseCursorInner".into()),
+            Type::CornerShape => Some("slint::cbindgen_private::CornerShape".into()),
             _ => None,
         }
     }
@@ -4949,6 +4950,12 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
         }
         // Generated code has no debug hooks; use the wrapped expression.
         Expression::DebugHook { expression, .. } => compile_expression(expression, ctx),
+        Expression::CornerShape(CornerShape::Superellipse(a)) => format!(
+            "slint::cbindgen_private::CornerShape(slint::cbindgen_private::CornerShape::Tag::Superellipse, {a})"
+        ),
+        Expression::CornerShape(s) => {
+            format!("slint::cbindgen_private::CornerShape::Tag::{s:?}")
+        }
     }
 }
 
@@ -5206,6 +5213,12 @@ fn compile_builtin_function_call(
                 c = a.next().unwrap(),
                 h = a.next().unwrap(),
                 alpha = a.next().unwrap(),
+            )
+        }
+        BuiltinFunction::CornerShapeSuperellipse => {
+            format!(
+                "slint::cbindgen_private::CornerShape(slint::cbindgen_private::CornerShape::Tag::Superellipse, static_cast<float>({k}))",
+                k = a.next().unwrap(),
             )
         }
         BuiltinFunction::ColorScheme => {

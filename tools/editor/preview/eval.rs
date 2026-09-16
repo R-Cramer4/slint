@@ -299,6 +299,17 @@ fn eval_expression(
                 expression_tree::MinMaxOp::Max => Value::Number(lhs.max(rhs)),
             }
         }
+        Expression::CornerShape(shape) => Value::CornerShape(match shape {
+            expression_tree::CornerShape::Round => i_slint_core::graphics::CornerShape::Round,
+            expression_tree::CornerShape::Notch => i_slint_core::graphics::CornerShape::Notch,
+            expression_tree::CornerShape::Scoop => i_slint_core::graphics::CornerShape::Scoop,
+            expression_tree::CornerShape::Bevel => i_slint_core::graphics::CornerShape::Bevel,
+            expression_tree::CornerShape::Square => i_slint_core::graphics::CornerShape::Square,
+            expression_tree::CornerShape::Squircle => i_slint_core::graphics::CornerShape::Squircle,
+            expression_tree::CornerShape::Superellipse(k) => {
+                i_slint_core::graphics::CornerShape::Superellipse(k.clone())
+            }
+        }),
         _ => Value::Void,
     }
 }

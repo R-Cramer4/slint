@@ -652,7 +652,8 @@ pub fn default_value_for_type(ty: &Type) -> Value {
         | Type::ElementReference
         | Type::ArrayOfU16
         | Type::LayoutCache
-        | Type::Closure => Value::Void,
+        | Type::Closure
+        | Type::CornerShape => Value::Void,
     }
 }
 
@@ -1097,6 +1098,19 @@ pub fn eval_expression(ctx: &mut EvalContext, expression: &Expression) -> Value 
                 return hook_value;
             }
             eval_expression(ctx, expression)
+        }
+        Expression::CornerShape(shape) => {
+            use i_slint_compiler::expression_tree::CornerShape as CS;
+            use i_slint_core::graphics::CornerShape as Core;
+            Value::CornerShape(match shape {
+                CS::Round => Core::Round,
+                CS::Notch => Core::Notch,
+                CS::Scoop => Core::Scoop,
+                CS::Bevel => Core::Bevel,
+                CS::Square => Core::Square,
+                CS::Squircle => Core::Squircle,
+                CS::Superellipse(a) => Core::Superellipse(*a),
+            })
         }
     }
 }
@@ -2213,6 +2227,10 @@ fn call_builtin_function(
                 h,
                 a.clamp(0.0, 1.0),
             )))
+        }
+        BuiltinFunction::CornerShapeSuperellipse => {
+            let k: f32 = eval_expression(ctx, &arguments[0]).try_into().unwrap_or(0.0);
+            Value::CornerShape(i_slint_core::graphics::CornerShape::Superellipse(k))
         }
         BuiltinFunction::AnimationTick => {
             Value::Number(i_slint_core::animations::animation_tick() as f64)
