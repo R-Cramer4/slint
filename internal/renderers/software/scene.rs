@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use euclid::Length;
 use i_slint_core::Color;
 use i_slint_core::graphics::{SharedImageBuffer, TexturePixelFormat};
-use i_slint_core::lengths::{PhysicalPx, PointLengths as _, SizeLengths as _};
+use i_slint_core::lengths::{CornerShapes, PhysicalPx, PointLengths as _, SizeLengths as _};
 
 #[derive(Default)]
 pub struct SceneVectors {
@@ -514,6 +514,7 @@ pub fn compute_range_in_buffer(
 #[derive(Debug)]
 pub struct RoundedRectangle {
     pub radius: PhysicalBorderRadius,
+    pub corner_shape: CornerShapes,
     /// the border's width
     pub width: PhysicalLength,
     pub border_color: PremultipliedRgbaColor,

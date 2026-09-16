@@ -381,37 +381,94 @@ pub(super) fn draw_rounded_rectangle_line(
         (Shifted::new(width) + Shifted::new(rr.right_clip.get() + extra_right_clip))
             .saturating_sub(x)
     };
-    let calculate_xxxx = |r: i16, y: i16| {
-        let r = Shifted::new(r);
-        // `y` is how far away from the center of the circle the current line is.
-        let y = r - Shifted::new(y);
-        // Circle equation: x = √(r² - y²)
-        // Coordinate from the left edge: x' = r - x
-        let x2 = r - (r * r).saturating_sub(y * y).sqrt();
-        let x1 = r - (r * r).saturating_sub((y - ONE) * (y - ONE)).sqrt();
-        let r2 = r.saturating_sub(border);
-        let x4 = r - (r2 * r2).saturating_sub(y * y).sqrt();
-        let x3 = r - (r2 * r2).saturating_sub((y - ONE) * (y - ONE)).sqrt();
-        (x1, x2, x3, x4)
+    // The border's inner edge is the outer curve shrunk by the border width, kept
+    // concentric so the stroke is a uniform width all around.
+    // `Round` uses its own fixed-point formula: algebraically equivalent to the general
+    // one below, but avoids a negative sqrt and its floating-point drift.
+    let calculate_xxxx = |r: i16, shape: i_slint_core::items::CornerShape, y: i16| {
+        if matches!(shape, i_slint_core::items::CornerShape::Round) {
+            let r = Shifted::new(r);
+            // `y` is now the distance from the circle's center.
+            let y = r - Shifted::new(y);
+            // Circle equation: x = √(r² - y²)
+            // Coordinate from the left edge: x' = r - x
+            let x2 = r - (r * r).saturating_sub(y * y).sqrt();
+            let x1 = r - (r * r).saturating_sub((y - ONE) * (y - ONE)).sqrt();
+            let r2 = r.saturating_sub(border);
+            let x4 = r - (r2 * r2).saturating_sub(y * y).sqrt();
+            let x3 = r - (r2 * r2).saturating_sub((y - ONE) * (y - ONE)).sqrt();
+            (x1, x2, x3, x4)
+        } else {
+            let to_shifted = |v: f32| Shifted((v.max(0.0) * 16.0).round() as u32);
+            let rf = r as f32;
+            let border_f = border.0 as f32 / 16.0;
+            let r2f = (rf - border_f).max(0.0);
+            // The far sample is normally `y + 1`, the row's far edge, since `corner_boundary`
+            // and `inner_corner_boundary` are right-continuous everywhere but `Notch`.
+            // `Notch` steps down instead of curving, at `y == r` outer and `y == border_f`
+            // inner. Sampling exactly on that step smears its full-width gradient across the
+            // row instead of leaving it flat, so nudge the far sample back to the near
+            // sample's side of the step.
+            let before_step = |step: f32, far: f32| if far == step { far - 1.0 } else { far };
+            let y_far = y as f32 + 1.0;
+            let outer_far = if shape == i_slint_core::items::CornerShape::Notch {
+                before_step(rf, y_far)
+            } else {
+                y_far
+            };
+            let inner_far = if shape == i_slint_core::items::CornerShape::Notch {
+                before_step(border_f, y_far)
+            } else {
+                y_far
+            };
+            let x2 = to_shifted(i_slint_core::graphics::corner_boundary(shape, rf, y as f32));
+            let x1 = to_shifted(i_slint_core::graphics::corner_boundary(shape, rf, outer_far));
+            let x4 =
+                to_shifted(i_slint_core::graphics::inner_corner_boundary(shape, rf, r2f, y as f32));
+            let x3 = to_shifted(i_slint_core::graphics::inner_corner_boundary(
+                shape, rf, r2f, inner_far,
+            ));
+            (x1, x2, x3, x4)
+        }
     };
 
-    let (x1, x2, x3, x4, x5, x6, x7, x8) = if let Some(r) = rr.radius.as_uniform() {
-        let (x1, x2, x3, x4) =
-            if y.get() < r { calculate_xxxx(r, y.get()) } else { (ZERO, ZERO, border, border) };
-        (x1, x2, x3, x4, rev(x4), rev(x3), rev(x2), rev(x1))
-    } else {
-        let (x1, x2, x3, x4) = if y1 < PhysicalLength::new(rr.radius.top_left) {
-            calculate_xxxx(rr.radius.top_left, y.get())
-        } else if y2 < PhysicalLength::new(rr.radius.bottom_left) {
-            calculate_xxxx(rr.radius.bottom_left, y.get())
+    // A row is in a corner's curve when within `radius` of the edge.
+    // `Notch`, `Bevel`, and `Scoop` don't taper into the straight edge: their border's
+    // inner wall runs *across* the corner, past the radius — see `inner_corner_extra`.
+    // Widen the zone by that amount to reach `calculate_xxxx` for those rows too.
+    let in_corner_zone =
+        |radius: i16, shape: i_slint_core::items::CornerShape, y: PhysicalLength| {
+            if y < PhysicalLength::new(radius) {
+                return true;
+            }
+            let r2 = (radius as f32 - rr.width.get() as f32).max(0.0);
+            let extra = i_slint_core::graphics::inner_corner_extra(shape, radius as f32, r2);
+            (y.get() as f32) < radius as f32 + extra
+        };
+
+    let (x1, x2, x3, x4, x5, x6, x7, x8) = if let (Some(r), Some(shape)) =
+        (rr.radius.as_uniform(), rr.corner_shape.as_uniform())
+    {
+        let (x1, x2, x3, x4) = if in_corner_zone(r, shape, y) {
+            calculate_xxxx(r, shape, y.get())
         } else {
             (ZERO, ZERO, border, border)
         };
-        let (x5, x6, x7, x8) = if y1 < PhysicalLength::new(rr.radius.top_right) {
-            let x = calculate_xxxx(rr.radius.top_right, y.get());
+        (x1, x2, x3, x4, rev(x4), rev(x3), rev(x2), rev(x1))
+    } else {
+        let (x1, x2, x3, x4) = if in_corner_zone(rr.radius.top_left, rr.corner_shape.top_left, y1) {
+            calculate_xxxx(rr.radius.top_left, rr.corner_shape.top_left, y.get())
+        } else if in_corner_zone(rr.radius.bottom_left, rr.corner_shape.bottom_left, y2) {
+            calculate_xxxx(rr.radius.bottom_left, rr.corner_shape.bottom_left, y.get())
+        } else {
+            (ZERO, ZERO, border, border)
+        };
+        let (x5, x6, x7, x8) = if in_corner_zone(rr.radius.top_right, rr.corner_shape.top_right, y1)
+        {
+            let x = calculate_xxxx(rr.radius.top_right, rr.corner_shape.top_right, y.get());
             (x.3, x.2, x.1, x.0)
-        } else if y2 < PhysicalLength::new(rr.radius.bottom_right) {
-            let x = calculate_xxxx(rr.radius.bottom_right, y.get());
+        } else if in_corner_zone(rr.radius.bottom_right, rr.corner_shape.bottom_right, y2) {
+            let x = calculate_xxxx(rr.radius.bottom_right, rr.corner_shape.bottom_right, y.get());
             (x.3, x.2, x.1, x.0)
         } else {
             (border, border, ZERO, ZERO)
