@@ -173,3 +173,19 @@ TouchArea {
 <BuiltInMouseCursor />
 
 </SlintProperty>
+
+## Rectangle
+### corner-shape
+<SlintProperty propName="corner-shape" typeName="corner-shape" defaultValue="round">
+
+A `corner-shape` is the shape of a corner as defined by a superellipse with the equation (<sup>x</sup>⁄<sub>a</sub>)<sup>2<sup>k</sup></sup> + (<sup>y</sup>⁄<sub>b</sub>)<sup>2<sup>k</sup></sup> = 1.
+
+    - `notch`: k = -infinity
+    - `scoop`: k = -1
+    - `bevel`: k = 0
+    - `round`: k = 1, this is the default behavior.
+    - `squircle`: k = 2
+    - `square`: k = infinity
+    - `superellipse(k)`
+
+</SlintProperty>

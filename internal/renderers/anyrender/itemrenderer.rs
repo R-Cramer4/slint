@@ -570,7 +570,14 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         }
     }
 
-    fn combine_clip(&mut self, clip_rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        clip_rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        // TODO: anyrender only clips to a circular-radius rounded rect.
+        // Other corner shapes aren't reflected in the clip region.
+        _shape: i_slint_core::lengths::CornerShapes,
+    ) -> bool {
         let clip = &mut self.current_state.clip_rect;
         let clip_region_valid = match clip.intersection(&clip_rect) {
             Some(r) => {

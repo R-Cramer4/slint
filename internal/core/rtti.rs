@@ -38,6 +38,7 @@ macro_rules! declare_ValueType_2 {
             f64,
             crate::SharedString,
             crate::graphics::Image,
+            crate::graphics::CornerShape,
             crate::Color,
             crate::PathData,
             crate::animations::EasingCurve,

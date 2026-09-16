@@ -609,12 +609,23 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             RenderingResult::ContinueRenderingWithoutChildren
         } else {
             self.layer_cache.release(item_rc);
-            self.combine_clip(clip_rect, clip_radius);
+            self.combine_clip(
+                clip_rect,
+                clip_radius,
+                i_slint_core::lengths::CornerShapes::default(),
+            );
             RenderingResult::ContinueRenderingChildren
         }
     }
 
-    fn combine_clip(&mut self, clip_rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        clip_rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        // TODO: femtovg only clips to a circular-radius rounded rect.
+        // Other corner shapes aren't reflected in the clip region.
+        _shape: i_slint_core::lengths::CornerShapes,
+    ) -> bool {
         let clip = &mut self.state.last_mut().unwrap().scissor;
         let clip_region_valid = match clip.intersection(&clip_rect) {
             Some(r) => {
