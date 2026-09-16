@@ -631,7 +631,12 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         self.scene.pop_layer();
     }
 
-    fn combine_clip(&mut self, clip_rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+    fn combine_clip(
+        &mut self,
+        clip_rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        _shape: i_slint_core::graphics::CornerShapes,
+    ) -> bool {
         let clip = &mut self.current_state.clip_rect;
         let clip_region_valid = match clip.intersection(&clip_rect) {
             Some(r) => {

@@ -16,6 +16,7 @@
 //!
 
 use crate::Coord;
+use crate::graphics::CornerShapes;
 use crate::item_rendering::{
     ItemRenderer, ItemRendererFeatures, RenderBorderRectangle, RenderImage, RenderRectangle,
     RenderText,
@@ -822,8 +823,13 @@ impl<T: ItemRenderer + ItemRendererFeatures> ItemRenderer for PartialRenderer<'_
     forward_rendering_call!(fn visit_opacity(Opacity) -> RenderingResult);
     forward_rendering_call!(fn visit_layer(Layer) -> RenderingResult);
 
-    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
-        self.actual_renderer.combine_clip(rect, radius)
+    fn combine_clip(
+        &mut self,
+        rect: LogicalRect,
+        radius: LogicalBorderRadius,
+        shape: CornerShapes,
+    ) -> bool {
+        self.actual_renderer.combine_clip(rect, radius, shape)
     }
 
     fn get_current_clip(&self) -> LogicalRect {
