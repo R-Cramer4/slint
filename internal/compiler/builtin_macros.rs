@@ -6,8 +6,8 @@
 
 use crate::diagnostics::{BuildDiagnostics, Spanned};
 use crate::expression_tree::{
-    BuiltinFunction, BuiltinMacroFunction, Callable, EasingCurve, Expression, MinMaxOp,
-    MouseCursorInner, Unit,
+    BuiltinFunction, BuiltinMacroFunction, Callable, CornerShape, EasingCurve, Expression,
+    MinMaxOp, MouseCursorInner, Unit,
 };
 use crate::langtype::Type;
 use crate::parser::NodeOrToken;
@@ -149,6 +149,20 @@ pub fn lower_macro(
             expr
         }
         BuiltinMacroFunction::Spring => spring_macro(n, sub_expr.collect(), diag),
+        BuiltinMacroFunction::Superellipse => {
+            let mut args: Vec<(Expression, Option<NodeOrToken>)> = sub_expr.collect();
+            if args.len() != 1 {
+                diag.push_error("'superellipse()' expects exactly one argument".into(), n);
+                return Expression::CornerShape(CornerShape::Superellipse(1.0));
+            }
+            let (k, arg_node) = args.pop().unwrap();
+            let k = k.maybe_convert_to(Type::Float32, &arg_node, diag, symbol_counters);
+            Expression::FunctionCall {
+                function: BuiltinFunction::CornerShapeSuperellipse.into(),
+                arguments: vec![k],
+                source_location: Some(n.to_source_location()),
+            }
+        }
     }
 }
 
@@ -660,7 +674,8 @@ fn to_debug_string(
         | Type::MouseCursor
         | Type::StyledText
         | Type::Array(_)
-        | Type::DataTransfer => {
+        | Type::DataTransfer
+        | Type::CornerShape => {
             Expression::StringLiteral("<debug-of-this-type-not-yet-implemented>".into())
         }
         Type::Duration
