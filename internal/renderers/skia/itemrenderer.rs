@@ -9,6 +9,7 @@ use super::{PhysicalBorderRadius, PhysicalLength, PhysicalPoint, PhysicalRect, P
 use i_slint_core::graphics::ApproxEq;
 use i_slint_core::graphics::ResolvedBrush;
 use i_slint_core::graphics::boxshadowcache::BoxShadowCache;
+use i_slint_core::graphics::corner_path::rounded_rect_path;
 use i_slint_core::graphics::euclid::num::Zero;
 use i_slint_core::graphics::euclid::{self, Vector2D};
 use i_slint_core::item_rendering::{
@@ -112,10 +113,17 @@ impl<'a> SkiaItemRenderer<'a> {
             skia_safe::AlphaType::Premul,
         );
 
-        let rounded_rect = to_skia_rrect(
-            &PhysicalRect::new(shadow_options.shape_origin(), shape_size),
-            &shadow_options.outer_radius(),
-        );
+        let shape = if shadow_options.corner_shape.is_all_round() {
+            skia_safe::Path::rrect(
+                to_skia_rrect(
+                    &PhysicalRect::new(shadow_options.shape_origin(), shape_size),
+                    &shadow_options.outer_radius(),
+                ),
+                None,
+            )
+        } else {
+            to_skia_path(shadow_options.drop_shadow_path().iter(), 1.)
+        };
 
         let mut paint = crate::solid_paint(&shadow_options.color);
         paint.set_anti_alias(true);
@@ -130,7 +138,7 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut surface = canvas.new_surface(&image_info, None)?;
         let surface_canvas = surface.canvas();
         surface_canvas.clear(skia_safe::Color::TRANSPARENT);
-        surface_canvas.draw_rrect(rounded_rect, &paint);
+        surface_canvas.draw_path(&shape, &paint);
         Some(surface.image_snapshot())
     }
 
@@ -144,10 +152,6 @@ impl<'a> SkiaItemRenderer<'a> {
             return None;
         }
         let blur = shadow_options.blur.get();
-        let spread = shadow_options.spread.get();
-        let radius = shadow_options.radius;
-        let offset_x = shadow_options.offset_x_inset;
-        let offset_y = shadow_options.offset_y_inset;
 
         // Image is sized to the rectangle's geometry; the geometry rrect serves as the clip so the
         // outer blurred edge stays hidden.
@@ -158,37 +162,14 @@ impl<'a> SkiaItemRenderer<'a> {
             skia_safe::AlphaType::Premul,
         );
 
-        let geometry_rrect = to_skia_rrect(
+        let geometry = rect_with_corners(
             &PhysicalRect::new(PhysicalPoint::zero(), PhysicalSize::new(width, height)),
-            &radius,
+            &shadow_options.radius,
+            shadow_options.corner_shape,
         );
 
-        // Inner "hole" rrect: geometry inset by spread on each side, translated by offset.
-        let inner_rect = skia_safe::Rect::new(
-            spread + offset_x,
-            spread + offset_y,
-            width - spread + offset_x,
-            height - spread + offset_y,
-        );
-        let inner_radius = shadow_options.inner_radius();
-        let inner_rrect = to_skia_rrect(
-            &PhysicalRect::new(
-                PhysicalPoint::new(inner_rect.left, inner_rect.top),
-                PhysicalSize::new(inner_rect.width(), inner_rect.height()),
-            ),
-            &inner_radius,
-        );
-
-        // Outer rect inflated well beyond the geometry so its blurred edge falls outside the clip.
-        let inflate = blur + spread.abs() + offset_x.abs() + offset_y.abs() + 16.;
-        let outer_rect =
-            skia_safe::Rect::new(-inflate, -inflate, width + inflate, height + inflate);
-
-        let mut path_builder = skia_safe::PathBuilder::new();
-        path_builder.set_fill_type(skia_safe::PathFillType::EvenOdd);
-        path_builder.add_rect(outer_rect, None, None);
-        path_builder.add_rrect(inner_rrect, None, None);
-        let path = path_builder.detach();
+        let mut path = to_skia_path(shadow_options.inset_shadow_ring_path().iter(), 1.);
+        path.set_fill_type(skia_safe::PathFillType::EvenOdd);
 
         let mut paint = crate::solid_paint(&shadow_options.color);
         paint.set_anti_alias(true);
@@ -203,7 +184,7 @@ impl<'a> SkiaItemRenderer<'a> {
         let mut surface = canvas.new_surface(&image_info, None)?;
         let surface_canvas = surface.canvas();
         surface_canvas.clear(skia_safe::Color::TRANSPARENT);
-        surface_canvas.clip_rrect(geometry_rrect, None, true);
+        surface_canvas.clip_path(&geometry, None, true);
         surface_canvas.draw_path(&path, &paint);
         Some(surface.image_snapshot())
     }
@@ -559,6 +540,21 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         let brush_width = layout.brush_size.width_length();
         let brush_height = layout.brush_size.height_length();
 
+        if !layout.corner_shape.is_all_round() {
+            let (background, border) = layout.shaped_paths();
+            for (path, brush) in
+                [(Some(background), rect.background()), (border, layout.border_color)]
+            {
+                if let Some(path) = path
+                    && let Some(mut paint) = self.brush_to_paint(brush, brush_width, brush_height)
+                {
+                    paint.set_anti_alias(true);
+                    self.canvas.draw_path(&to_skia_path(path.iter(), 1.), &paint);
+                }
+            }
+            return;
+        }
+
         if let Some(mut fill_paint) =
             self.brush_to_paint(rect.background(), brush_width, brush_height)
         {
@@ -662,47 +658,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                 let (logical_offset, path_events): (crate::euclid::Vector2D<f32, LogicalPx>, _) =
                     path.fitted_path_events(item_rc)?;
 
-                let mut builder = skia_safe::PathBuilder::new();
-
-                for x in path_events.iter() {
-                    match x {
-                        lyon_path::Event::Begin { at } => {
-                            builder.move_to(to_skia_point(
-                                LogicalPoint::from_untyped(at) * self.scale_factor,
-                            ));
-                        }
-                        lyon_path::Event::Line { from: _, to } => {
-                            builder.line_to(to_skia_point(
-                                LogicalPoint::from_untyped(to) * self.scale_factor,
-                            ));
-                        }
-                        lyon_path::Event::Quadratic { from: _, ctrl, to } => {
-                            builder.quad_to(
-                                to_skia_point(LogicalPoint::from_untyped(ctrl) * self.scale_factor),
-                                to_skia_point(LogicalPoint::from_untyped(to) * self.scale_factor),
-                            );
-                        }
-
-                        lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
-                            builder.cubic_to(
-                                to_skia_point(
-                                    LogicalPoint::from_untyped(ctrl1) * self.scale_factor,
-                                ),
-                                to_skia_point(
-                                    LogicalPoint::from_untyped(ctrl2) * self.scale_factor,
-                                ),
-                                to_skia_point(LogicalPoint::from_untyped(to) * self.scale_factor),
-                            );
-                        }
-                        lyon_path::Event::End { last: _, first: _, close } => {
-                            if close {
-                                builder.close();
-                            }
-                        }
-                    }
-                }
-
-                (logical_offset * self.scale_factor, builder.detach()).into()
+                let skpath = to_skia_path(path_events.iter(), self.scale_factor.get());
+                (logical_offset * self.scale_factor, skpath).into()
             }) {
                 Some(offset_and_path) => offset_and_path,
                 None => return,
@@ -828,11 +785,15 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         &mut self,
         rect: LogicalRect,
         radius: LogicalBorderRadius,
-        _shape: i_slint_core::graphics::CornerShapes,
+        shape: i_slint_core::graphics::CornerShapes,
     ) -> bool {
-        let rounded_rect =
-            to_skia_rrect(&(rect * self.scale_factor), &(radius * self.scale_factor));
-        self.canvas.clip_rrect(rounded_rect, None, true);
+        let (rect, radius) = (rect * self.scale_factor, radius * self.scale_factor);
+        if shape.is_all_round() {
+            self.canvas.clip_rrect(to_skia_rrect(&rect, &radius), None, true);
+        } else {
+            let path = rounded_rect_path(rect.to_untyped(), radius, shape);
+            self.canvas.clip_path(&to_skia_path(path.iter(), 1.), None, true);
+        }
         self.canvas.local_clip_bounds().is_some()
     }
 
@@ -1207,6 +1168,51 @@ pub fn to_skia_rrect(rect: &PhysicalRect, radius: &PhysicalBorderRadius) -> skia
             ],
         )
     }
+}
+
+/// The path of `rect` with corners of `radius` and `corner_shape`, drawn as a native rounded
+/// rectangle where every corner is round.
+fn rect_with_corners(
+    rect: &PhysicalRect,
+    radius: &PhysicalBorderRadius,
+    corner_shape: i_slint_core::graphics::CornerShapes,
+) -> skia_safe::Path {
+    if corner_shape.is_all_round() {
+        skia_safe::Path::rrect(to_skia_rrect(rect, radius), None)
+    } else {
+        to_skia_path(rounded_rect_path(rect.to_untyped(), *radius, corner_shape).iter(), 1.)
+    }
+}
+
+/// Converts lyon path events to a Skia path, scaling every point by `scale`.
+fn to_skia_path(
+    events: impl IntoIterator<Item = lyon_path::Event<lyon_path::math::Point, lyon_path::math::Point>>,
+    scale: f32,
+) -> skia_safe::Path {
+    let point = |p: lyon_path::math::Point| to_skia_point(PhysicalPoint::from_untyped(p * scale));
+    let mut builder = skia_safe::PathBuilder::new();
+    for event in events {
+        match event {
+            lyon_path::Event::Begin { at } => {
+                builder.move_to(point(at));
+            }
+            lyon_path::Event::Line { from: _, to } => {
+                builder.line_to(point(to));
+            }
+            lyon_path::Event::Quadratic { from: _, ctrl, to } => {
+                builder.quad_to(point(ctrl), point(to));
+            }
+            lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
+                builder.cubic_to(point(ctrl1), point(ctrl2), point(to));
+            }
+            lyon_path::Event::End { last: _, first: _, close } => {
+                if close {
+                    builder.close();
+                }
+            }
+        }
+    }
+    builder.detach()
 }
 
 impl ItemRendererFeatures for SkiaItemRenderer<'_> {
