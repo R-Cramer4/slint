@@ -22,6 +22,7 @@ mod minimal_software_window;
 #[cfg(feature = "path")]
 mod path;
 mod scene;
+mod shaped_corners;
 
 use self::fonts::GlyphRenderer;
 pub use self::minimal_software_window::MinimalSoftwareWindow;
@@ -160,7 +161,7 @@ impl<T: Copy + NumCast + core::ops::Sub<Output = T>> Transform for euclid::Rect<
     }
 }
 
-impl<T: Copy> Transform for BorderRadius<T, PhysicalPx> {
+impl<T: Copy, U> Transform for BorderRadius<T, U> {
     fn transformed(self, info: RotationInfo) -> Self {
         match info.orientation {
             RenderingRotation::NoRotation => self,
@@ -658,7 +659,7 @@ mod target_pixel_buffer;
 
 #[cfg(feature = "experimental")]
 pub use target_pixel_buffer::{
-    DrawRectangleArgs, DrawTextureArgs, TargetPixelBuffer, TexturePixelFormat,
+    CornerShape, DrawRectangleArgs, DrawTextureArgs, TargetPixelBuffer, TexturePixelFormat,
 };
 
 #[cfg(not(feature = "experimental"))]
@@ -1903,13 +1904,29 @@ fn process_rectangle_impl(
         right_clip: PhysicalLength::new((geom.max_x() - clipped.max_x() + E) as _),
     };
 
+    let corner_shape = i_slint_core::graphics::CornerShapes::new(
+        args.top_left_corner_shape,
+        args.top_right_corner_shape,
+        args.bottom_right_corner_shape,
+        args.bottom_left_corner_shape,
+    );
+
     let mut border_color =
         PremultipliedRgbaColor::from(alpha_color(args.border.color(), args.alpha));
     let border =
         PhysicalLength::new(if border_color.alpha == 0 { 0 } else { args.border_width as _ });
-    let gradient_clip = GradientClip {
-        shape: rounded_shape,
-        opaque_border: if border_color.alpha == u8::MAX { border } else { PhysicalLength::new(0) },
+    // Gradients are only clipped along round corners.
+    let gradient_clip = if corner_shape.is_all_round() {
+        GradientClip {
+            shape: rounded_shape,
+            opaque_border: if border_color.alpha == u8::MAX {
+                border
+            } else {
+                PhysicalLength::new(0)
+            },
+        }
+    } else {
+        GradientClip::default()
     };
     let truncated_rect: PhysicalRect = clipped.cast();
     // The clip must line up with the rounded rectangle's border, which is snapped by rounding.
@@ -2114,6 +2131,18 @@ fn process_rectangle_impl(
             clipped.round().cast(),
             RoundedRectangle {
                 shape: rounded_shape,
+                shaped_corners: (!corner_shape.is_all_round()).then(|| {
+                    alloc::boxed::Box::new(shaped_corners::ShapedCorners::new(
+                        BorderRadius::new(
+                            args.top_left_radius,
+                            args.top_right_radius,
+                            args.bottom_right_radius,
+                            args.bottom_left_radius,
+                        ),
+                        corner_shape,
+                        border.get(),
+                    ))
+                }),
                 width: border,
                 border_color,
                 inner_color: color,
@@ -3014,6 +3043,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 .transformed(self.rotation)
                 .min(BorderRadius::from_length(geom.width_length() / 2.))
                 .min(BorderRadius::from_length(geom.height_length() / 2.));
+            let corner_shape = rect.border_corner_shape().transformed(self.rotation);
 
             let border = rect.border_width().cast() * self.scale_factor;
             let border_color =
@@ -3028,6 +3058,10 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 top_right_radius: radius.top_right,
                 bottom_right_radius: radius.bottom_right,
                 bottom_left_radius: radius.bottom_left,
+                top_left_corner_shape: corner_shape.top_left,
+                top_right_corner_shape: corner_shape.top_right,
+                bottom_right_corner_shape: corner_shape.bottom_right,
+                bottom_left_corner_shape: corner_shape.bottom_left,
                 border_width: border.get(),
                 background: rect.background(),
                 border: border_color,

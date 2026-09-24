@@ -4,7 +4,7 @@
 use super::*;
 
 use i_slint_core::graphics::IntSize;
-pub use i_slint_core::graphics::TexturePixelFormat;
+pub use i_slint_core::graphics::{CornerShape, TexturePixelFormat};
 
 /// The pixel data of a for the source of a [`Texture`].
 #[derive(Clone)]
@@ -180,6 +180,15 @@ pub struct DrawRectangleArgs {
     /// The bottom-left radius.
     pub bottom_left_radius: f32,
 
+    /// The shape of the top-left corner.
+    pub top_left_corner_shape: CornerShape,
+    /// The shape of the top-right corner.
+    pub top_right_corner_shape: CornerShape,
+    /// The shape of the bottom-right corner.
+    pub bottom_right_corner_shape: CornerShape,
+    /// The shape of the bottom-left corner.
+    pub bottom_left_corner_shape: CornerShape,
+
     /// The width of the border.
     pub border_width: f32,
 
@@ -234,6 +243,9 @@ pub trait TargetPixelBuffer {
     }
 
     /// Draw a rectangle specified by the DrawRectangleArgs. That rectangle must be clipped to the given region
+    ///
+    /// Return `false` to let the software renderer draw a rectangle this implementation can't,
+    /// such as one with a corner shape other than [`CornerShape::Round`].
     fn draw_rectangle(&mut self, _: &DrawRectangleArgs, _clip: &PhysicalRegion) -> bool {
         false
     }
