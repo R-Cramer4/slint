@@ -8,8 +8,11 @@ use anyrender::PaintScene;
 use i_slint_core::graphics::ResolvedBrush;
 #[cfg(any(feature = "image-pixel-format-rgb565", feature = "image-pixel-format-gray8"))]
 use i_slint_core::graphics::Rgba8Pixel;
+use i_slint_core::graphics::corner_path::rounded_rect_path;
 use i_slint_core::graphics::euclid;
-use i_slint_core::graphics::{Image, ImageCacheKey, SharedImageBuffer, SharedPixelBuffer};
+use i_slint_core::graphics::{
+    CornerShapes, Image, ImageCacheKey, SharedImageBuffer, SharedPixelBuffer,
+};
 use i_slint_core::item_rendering::{
     BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, RenderBorderRectangle,
     RenderImage, RenderRectangle, RenderText,
@@ -150,6 +153,23 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         };
 
         let transform = self.current_state.transform;
+        if !layout.corner_shape.is_all_round() {
+            let (background, border) = layout.shaped_paths();
+            for (path, brush) in
+                [(Some(background), rect.background()), (border, layout.border_color)]
+            {
+                if let Some(path) = path {
+                    self.fill_with_brush(
+                        brush,
+                        layout.brush_size,
+                        transform,
+                        peniko::Fill::NonZero,
+                        &to_bez_path(path.iter(), 1.),
+                    );
+                }
+            }
+            return;
+        }
         self.fill_with_brush(
             rect.background(),
             layout.brush_size,
@@ -434,39 +454,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
 
         let sf = self.scale_factor;
 
-        let mut bezpath = kurbo::BezPath::new();
-        for event in path_events.iter() {
-            match event {
-                lyon_path::Event::Begin { at } => {
-                    let p = LogicalPoint::from_untyped(at) * sf;
-                    bezpath.move_to((p.x as f64, p.y as f64));
-                }
-                lyon_path::Event::Line { to, .. } => {
-                    let p = LogicalPoint::from_untyped(to) * sf;
-                    bezpath.line_to((p.x as f64, p.y as f64));
-                }
-                lyon_path::Event::Quadratic { ctrl, to, .. } => {
-                    let c = LogicalPoint::from_untyped(ctrl) * sf;
-                    let p = LogicalPoint::from_untyped(to) * sf;
-                    bezpath.quad_to((c.x as f64, c.y as f64), (p.x as f64, p.y as f64));
-                }
-                lyon_path::Event::Cubic { ctrl1, ctrl2, to, .. } => {
-                    let c1 = LogicalPoint::from_untyped(ctrl1) * sf;
-                    let c2 = LogicalPoint::from_untyped(ctrl2) * sf;
-                    let p = LogicalPoint::from_untyped(to) * sf;
-                    bezpath.curve_to(
-                        (c1.x as f64, c1.y as f64),
-                        (c2.x as f64, c2.y as f64),
-                        (p.x as f64, p.y as f64),
-                    );
-                }
-                lyon_path::Event::End { close, .. } => {
-                    if close {
-                        bezpath.close_path();
-                    }
-                }
-            }
-        }
+        let bezpath = to_bez_path(path_events.iter(), sf.get());
 
         let phys_offset = offset * sf;
         let transform = self
@@ -520,11 +508,14 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         // anyrender's box shadow takes one uniform corner radius,
         // so approximate per-corner radii with their average
         // until vello grows support for non-uniform ones (linebender/vello#1245).
-        let radius = (box_shadow.logical_border_radius() * sf)
+        let corner_radius = (box_shadow.logical_border_radius() * sf)
             .fit_to_size(phys_size.width, phys_size.height);
-        let base_radius =
-            (radius.top_left + radius.top_right + radius.bottom_right + radius.bottom_left) as f64
-                / 4.;
+        let base_radius = (corner_radius.top_left
+            + corner_radius.top_right
+            + corner_radius.bottom_right
+            + corner_radius.bottom_left) as f64
+            / 4.;
+        let corner_shape = box_shadow.logical_corner_shape();
 
         if box_shadow.inset() {
             self.draw_inset_shadow(
@@ -532,7 +523,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
                 kurbo::Vec2::new(offset.x as f64, offset.y as f64),
                 spread,
                 blur,
-                base_radius,
+                (base_radius, corner_radius, corner_shape),
                 to_kurbo_size(phys_size),
             );
             return;
@@ -550,7 +541,18 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
             return;
         }
 
-        if blur == 0. {
+        if blur == 0. && !corner_shape.is_all_round() {
+            let spread_radius = (corner_radius + PhysicalBorderRadius::new_uniform(spread as f32))
+                .max(PhysicalBorderRadius::default());
+            let shape = shaped_rect_shape(from_kurbo_rect(rect), spread_radius, corner_shape);
+            self.scene.fill(
+                peniko::Fill::default(),
+                self.current_state.transform,
+                peniko::BrushRef::Solid(to_peniko_color(color)),
+                None,
+                &shape,
+            );
+        } else if blur == 0. {
             // No blur: a plain rounded rectangle fill matches exactly.
             let shape = RectShape::uniform(rect, radius);
             self.scene.fill(
@@ -563,6 +565,8 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         } else {
             // The CSS drop-shadow convention Slint follows: the Gaussian's
             // standard deviation is half the blur radius.
+            // This primitive only draws round corners, so a blurred shadow
+            // ignores `corner_shape`.
             self.scene.draw_box_shadow(
                 self.current_state.transform,
                 rect,
@@ -577,7 +581,7 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         &mut self,
         clip_rect: LogicalRect,
         radius: LogicalBorderRadius,
-        _shape: i_slint_core::graphics::CornerShapes,
+        shape: CornerShapes,
     ) -> bool {
         let clip = &mut self.current_state.clip_rect;
         let clip_region_valid = match clip.intersection(&clip_rect) {
@@ -591,7 +595,8 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
             }
         };
 
-        let clip_shape = phys_rect_shape(clip_rect * self.scale_factor, radius * self.scale_factor);
+        let clip_shape =
+            shaped_rect_shape(clip_rect * self.scale_factor, radius * self.scale_factor, shape);
 
         self.scene.push_clip_layer(self.current_state.transform, &clip_shape);
         self.current_state.layer_count += 1;
@@ -835,14 +840,19 @@ impl<'a, S: PaintScene> AnyrenderItemRenderer<'a, S> {
         offset: kurbo::Vec2,
         spread: f64,
         blur: f64,
-        base_radius: f64,
+        (base_radius, corner_radius, corner_shape): (f64, PhysicalBorderRadius, CornerShapes),
         size: kurbo::Size,
     ) {
         let border_rect = kurbo::Rect::new(0., 0., size.width, size.height);
         if border_rect.is_zero_area() {
             return;
         }
-        let border_shape = RectShape::uniform(border_rect, base_radius);
+        let shaped = !corner_shape.is_all_round();
+        let border_shape = if shaped {
+            shaped_rect_shape(from_kurbo_rect(border_rect), corner_radius, corner_shape)
+        } else {
+            RectShape::uniform(border_rect, base_radius)
+        };
 
         // The shadow must not paint outside the item.
         self.scene.push_clip_layer(self.current_state.transform, &border_shape);
@@ -877,12 +887,19 @@ impl<'a, S: PaintScene> AnyrenderItemRenderer<'a, S> {
             // clear of shadow, regardless of the shadow color's alpha.
             let opaque = peniko::color::palette::css::BLACK;
             if blur == 0. {
+                let interior_shape = if shaped {
+                    let radius = (corner_radius - PhysicalBorderRadius::new_uniform(spread as f32))
+                        .max(PhysicalBorderRadius::default());
+                    shaped_rect_shape(from_kurbo_rect(interior), radius, corner_shape)
+                } else {
+                    RectShape::uniform(interior, interior_radius)
+                };
                 self.scene.fill(
                     peniko::Fill::default(),
                     self.current_state.transform,
                     peniko::BrushRef::Solid(opaque),
                     None,
-                    &RectShape::uniform(interior, interior_radius),
+                    &interior_shape,
                 );
             } else {
                 self.scene.draw_box_shadow(
@@ -1059,6 +1076,13 @@ fn to_kurbo_size(size: PhysicalSize) -> kurbo::Size {
     kurbo::Size::new(size.width as f64, size.height as f64)
 }
 
+fn from_kurbo_rect(rect: kurbo::Rect) -> PhysicalRect {
+    PhysicalRect::new(
+        PhysicalPoint::new(rect.x0 as f32, rect.y0 as f32),
+        PhysicalSize::new(rect.width() as f32, rect.height() as f32),
+    )
+}
+
 fn phys_rect_shape(rect: PhysicalRect, radius: PhysicalBorderRadius) -> RectShape {
     let rect = to_kurbo_rect(rect);
     if radius.is_zero() {
@@ -1075,8 +1099,50 @@ fn phys_rect_shape(rect: PhysicalRect, radius: PhysicalBorderRadius) -> RectShap
     ))
 }
 
+/// Like [`phys_rect_shape`], with each corner's shape.
+fn shaped_rect_shape(
+    rect: PhysicalRect,
+    radius: PhysicalBorderRadius,
+    corner_shape: CornerShapes,
+) -> RectShape {
+    if corner_shape.is_all_round() {
+        phys_rect_shape(rect, radius)
+    } else {
+        RectShape::Shaped(to_bez_path(
+            rounded_rect_path(rect.to_untyped(), radius, corner_shape).iter(),
+            1.,
+        ))
+    }
+}
+
+/// Converts lyon path events to a kurbo path, scaling every point by `scale`.
+fn to_bez_path(
+    events: impl IntoIterator<Item = lyon_path::Event<lyon_path::math::Point, lyon_path::math::Point>>,
+    scale: f32,
+) -> kurbo::BezPath {
+    let point = |p: lyon_path::math::Point| ((p.x * scale) as f64, (p.y * scale) as f64);
+    let mut bezpath = kurbo::BezPath::new();
+    for event in events {
+        match event {
+            lyon_path::Event::Begin { at } => bezpath.move_to(point(at)),
+            lyon_path::Event::Line { to, .. } => bezpath.line_to(point(to)),
+            lyon_path::Event::Quadratic { ctrl, to, .. } => bezpath.quad_to(point(ctrl), point(to)),
+            lyon_path::Event::Cubic { ctrl1, ctrl2, to, .. } => {
+                bezpath.curve_to(point(ctrl1), point(ctrl2), point(to))
+            }
+            lyon_path::Event::End { close, .. } => {
+                if close {
+                    bezpath.close_path();
+                }
+            }
+        }
+    }
+    bezpath
+}
+
 /// A rectangle that may have rounded corners, staying a plain
-/// [`kurbo::Rect`] when none of them do.
+/// [`kurbo::Rect`] when none of them do, or a path when some corner has
+/// another shape.
 ///
 /// [`kurbo::RoundedRect`] does not collapse zero radii: it emits one
 /// degenerate cubic per corner whatever the radii are, which backends then
@@ -1084,10 +1150,10 @@ fn phys_rect_shape(rect: PhysicalRect, radius: PhysicalBorderRadius) -> RectShap
 /// interface, and keeping those a `Rect` also keeps
 /// [`kurbo::Shape::as_rect`] answering, so a backend with a fast path for
 /// axis-aligned rectangles can still recognize one.
-#[derive(Clone, Copy)]
 enum RectShape {
     Sharp(kurbo::Rect),
     Rounded(kurbo::RoundedRect),
+    Shaped(kurbo::BezPath),
 }
 
 impl RectShape {
@@ -1106,18 +1172,20 @@ impl RectShape {
 // hands out for a rounded rectangle, and the iterator is a short-lived local.
 // Boxing it would move an allocation into every fill.
 #[allow(clippy::large_enum_variant)]
-enum RectShapePathIter {
+enum RectShapePathIter<'a> {
     Sharp(kurbo::RectPathIter),
     Rounded(kurbo::RoundedRectPathIter),
+    Shaped(core::iter::Copied<core::slice::Iter<'a, kurbo::PathEl>>),
 }
 
-impl Iterator for RectShapePathIter {
+impl Iterator for RectShapePathIter<'_> {
     type Item = kurbo::PathEl;
 
     fn next(&mut self) -> Option<kurbo::PathEl> {
         match self {
             Self::Sharp(iter) => iter.next(),
             Self::Rounded(iter) => iter.next(),
+            Self::Shaped(iter) => iter.next(),
         }
     }
 }
@@ -1125,12 +1193,13 @@ impl Iterator for RectShapePathIter {
 /// Delegates to whichever variant is held, so that a `RectShape` behaves
 /// exactly like the `kurbo` shape inside it.
 impl kurbo::Shape for RectShape {
-    type PathElementsIter<'iter> = RectShapePathIter;
+    type PathElementsIter<'iter> = RectShapePathIter<'iter>;
 
-    fn path_elements(&self, tolerance: f64) -> RectShapePathIter {
+    fn path_elements(&self, tolerance: f64) -> RectShapePathIter<'_> {
         match self {
             Self::Sharp(rect) => RectShapePathIter::Sharp(rect.path_elements(tolerance)),
             Self::Rounded(rect) => RectShapePathIter::Rounded(rect.path_elements(tolerance)),
+            Self::Shaped(path) => RectShapePathIter::Shaped(path.elements().iter().copied()),
         }
     }
 
@@ -1138,6 +1207,7 @@ impl kurbo::Shape for RectShape {
         match self {
             Self::Sharp(rect) => rect.area(),
             Self::Rounded(rect) => rect.area(),
+            Self::Shaped(path) => path.area(),
         }
     }
 
@@ -1145,6 +1215,7 @@ impl kurbo::Shape for RectShape {
         match self {
             Self::Sharp(rect) => rect.perimeter(accuracy),
             Self::Rounded(rect) => rect.perimeter(accuracy),
+            Self::Shaped(path) => path.perimeter(accuracy),
         }
     }
 
@@ -1152,6 +1223,7 @@ impl kurbo::Shape for RectShape {
         match self {
             Self::Sharp(rect) => rect.winding(pt),
             Self::Rounded(rect) => rect.winding(pt),
+            Self::Shaped(path) => path.winding(pt),
         }
     }
 
@@ -1159,6 +1231,7 @@ impl kurbo::Shape for RectShape {
         match self {
             Self::Sharp(rect) => rect.bounding_box(),
             Self::Rounded(rect) => rect.bounding_box(),
+            Self::Shaped(path) => path.bounding_box(),
         }
     }
 
@@ -1166,6 +1239,7 @@ impl kurbo::Shape for RectShape {
         match self {
             Self::Sharp(rect) => rect.as_rect(),
             Self::Rounded(rect) => rect.as_rect(),
+            Self::Shaped(path) => path.as_rect(),
         }
     }
 
@@ -1173,6 +1247,7 @@ impl kurbo::Shape for RectShape {
         match self {
             Self::Sharp(rect) => rect.as_rounded_rect(),
             Self::Rounded(rect) => rect.as_rounded_rect(),
+            Self::Shaped(path) => path.as_rounded_rect(),
         }
     }
 }
