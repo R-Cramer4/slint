@@ -440,6 +440,11 @@ mod software_renderer {
         pub bottom_right_radius: f32,
         pub bottom_left_radius: f32,
 
+        pub top_left_corner_shape: i_slint_core::graphics::CornerShape,
+        pub top_right_corner_shape: i_slint_core::graphics::CornerShape,
+        pub bottom_right_corner_shape: i_slint_core::graphics::CornerShape,
+        pub bottom_left_corner_shape: i_slint_core::graphics::CornerShape,
+
         pub border_width: f32,
 
         pub background: Brush,
@@ -461,6 +466,10 @@ mod software_renderer {
                 top_right_radius: from.top_right_radius,
                 bottom_right_radius: from.bottom_right_radius,
                 bottom_left_radius: from.bottom_left_radius,
+                top_left_corner_shape: from.top_left_corner_shape,
+                top_right_corner_shape: from.top_right_corner_shape,
+                bottom_right_corner_shape: from.bottom_right_corner_shape,
+                bottom_left_corner_shape: from.bottom_left_corner_shape,
                 border_width: from.border_width,
                 background: from.background.clone(),
                 border: from.border.clone(),

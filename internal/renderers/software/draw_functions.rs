@@ -359,6 +359,18 @@ pub(super) fn draw_rounded_rectangle_line(
     extra_left_clip: i16,
     extra_right_clip: i16,
 ) {
+    if let Some(corners) = &rr.shaped_corners {
+        draw_shaped_rectangle_line(
+            span,
+            line,
+            rr,
+            corners,
+            line_buffer,
+            extra_left_clip,
+            extra_right_clip,
+        );
+        return;
+    }
     /// This is an integer shifted by 4 bits.
     /// Note: this is not a "fixed point" because multiplication and sqrt operation operate to
     /// the shifted integer
@@ -557,6 +569,81 @@ pub(super) fn draw_rounded_rectangle_line(
         };
         line_buffer[x].blend(col);
     });
+}
+
+/// Draws one line of a rounded rectangle with a corner that isn't round, from the coverage
+/// of its corners.
+fn draw_shaped_rectangle_line(
+    span: &PhysicalRect,
+    line: PhysicalLength,
+    rr: &super::RoundedRectangle,
+    corners: &crate::shaped_corners::ShapedCorners,
+    line_buffer: &mut [impl TargetPixel],
+    extra_left_clip: i16,
+    extra_right_clip: i16,
+) {
+    use crate::shaped_corners::Corner;
+
+    let width = line_buffer.len();
+    let from_top = ((line - span.origin.y_length()) + rr.top_clip).get() as usize;
+    let from_bottom = ((span.origin.y_length() + span.size.height_length() - line) + rr.bottom_clip
+        - PhysicalLength::new(1))
+    .get() as usize;
+    let left_clip = (rr.left_clip.get() + extra_left_clip) as usize;
+    let full_width = left_clip + width + (rr.right_clip.get() + extra_right_clip) as usize;
+    let border = corners.border_width();
+    let in_border_row = from_top < border || from_bottom < border;
+
+    // The corners on one side whose rows this line crosses; with none, that side is straight.
+    let side = |top: Corner, bottom: Corner| {
+        [(top, from_top), (bottom, from_bottom)]
+            .map(|(c, row)| (row < corners.height(c)).then_some((c, row)))
+    };
+    let (left, right) =
+        (side(Corner::TopLeft, Corner::BottomLeft), side(Corner::TopRight, Corner::BottomRight));
+    let coverage = |side: &[Option<(Corner, usize)>; 2], column: usize| {
+        let straight = (255, if column < border || in_border_row { 0 } else { 255 });
+        side.iter().flatten().fold(straight, |(outer, inner), &(corner, row)| {
+            let (o, i) = corners.coverage(corner, row, column);
+            (outer.min(o), inner.min(i))
+        })
+    };
+    let extent = |side: &[Option<(Corner, usize)>; 2]| {
+        side.iter()
+            .flatten()
+            .map(|&(corner, row)| corners.width(corner, row))
+            .fold(border, usize::max)
+    };
+
+    let color = |(outer, inner): (u8, u8)| {
+        let (border_share, inner_share) = ((outer - inner) as u32, inner as u32);
+        let mix = |b: u8, i: u8| ((b as u32 * border_share + i as u32 * inner_share) / 255) as u8;
+        let (b, i) = (rr.border_color, rr.inner_color);
+        PremultipliedRgbaColor {
+            red: mix(b.red, i.red),
+            green: mix(b.green, i.green),
+            blue: mix(b.blue, i.blue),
+            alpha: mix(b.alpha, i.alpha),
+        }
+    };
+
+    // Past both sides' extents, every pixel is inside the border's inner edge, or in the border
+    // on its top and bottom rows.
+    let left_end = extent(&left).saturating_sub(left_clip).min(width);
+    let right_start = full_width.saturating_sub(extent(&right) + left_clip).clamp(left_end, width);
+    for x in (0..left_end).chain(right_start..width) {
+        let column = x + left_clip;
+        let (lo, li) = coverage(&left, column);
+        let (ro, ri) = coverage(&right, full_width - 1 - column);
+        let (outer, inner) = (lo.min(ro), li.min(ri));
+        if outer > 0 {
+            line_buffer[x].blend(color((outer, inner)));
+        }
+    }
+    let middle = if in_border_row { rr.border_color } else { rr.inner_color };
+    if left_end < right_start && middle.alpha > 0 {
+        TargetPixel::blend_slice(&mut line_buffer[left_end..right_start], middle);
+    }
 }
 
 // a is between 0 and 255. When 0, we get color1, when 255 we get color2

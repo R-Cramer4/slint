@@ -22,6 +22,7 @@ mod minimal_software_window;
 #[cfg(feature = "path")]
 mod path;
 mod scene;
+mod shaped_corners;
 
 use self::fonts::GlyphRenderer;
 pub use self::minimal_software_window::MinimalSoftwareWindow;
@@ -160,7 +161,7 @@ impl<T: Copy + NumCast + core::ops::Sub<Output = T>> Transform for euclid::Rect<
     }
 }
 
-impl<T: Copy> Transform for BorderRadius<T, PhysicalPx> {
+impl<T: Copy, U> Transform for BorderRadius<T, U> {
     fn transformed(self, info: RotationInfo) -> Self {
         match info.orientation {
             RenderingRotation::NoRotation => self,
@@ -658,7 +659,7 @@ mod target_pixel_buffer;
 
 #[cfg(feature = "experimental")]
 pub use target_pixel_buffer::{
-    DrawRectangleArgs, DrawTextureArgs, TargetPixelBuffer, TexturePixelFormat,
+    CornerShape, DrawRectangleArgs, DrawTextureArgs, TargetPixelBuffer, TexturePixelFormat,
 };
 
 #[cfg(not(feature = "experimental"))]
@@ -2057,6 +2058,12 @@ fn process_rectangle_impl(
         bottom_left: args.bottom_left_radius as _,
         _unit: Default::default(),
     };
+    let corner_shape = i_slint_core::graphics::CornerShapes::new(
+        args.top_left_corner_shape,
+        args.top_right_corner_shape,
+        args.bottom_right_corner_shape,
+        args.bottom_left_corner_shape,
+    );
 
     if !radius.is_zero() {
         // Add a small value to make sure that the clip is always positive despite floating point shenanigans
@@ -2066,6 +2073,18 @@ fn process_rectangle_impl(
             clipped.round().cast(),
             RoundedRectangle {
                 radius,
+                shaped_corners: (!corner_shape.is_all_round()).then(|| {
+                    alloc::boxed::Box::new(shaped_corners::ShapedCorners::new(
+                        BorderRadius::new(
+                            args.top_left_radius,
+                            args.top_right_radius,
+                            args.bottom_right_radius,
+                            args.bottom_left_radius,
+                        ),
+                        corner_shape,
+                        border.get(),
+                    ))
+                }),
                 width: border,
                 border_color,
                 inner_color: color,
@@ -2968,6 +2987,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
             let radius = (rect.border_radius().cast() * self.scale_factor)
                 .transformed(self.rotation)
                 .fit_to_size(geom.width(), geom.height());
+            let corner_shape = rect.border_corner_shape().transformed(self.rotation);
 
             let border = rect.border_width().cast() * self.scale_factor;
             let border_color =
@@ -2982,6 +3002,10 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 top_right_radius: radius.top_right,
                 bottom_right_radius: radius.bottom_right,
                 bottom_left_radius: radius.bottom_left,
+                top_left_corner_shape: corner_shape.top_left,
+                top_right_corner_shape: corner_shape.top_right,
+                bottom_right_corner_shape: corner_shape.bottom_right,
+                bottom_left_corner_shape: corner_shape.bottom_left,
                 border_width: border.get(),
                 background: rect.background(),
                 border: border_color,

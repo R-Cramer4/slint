@@ -530,6 +530,8 @@ pub fn compute_range_in_buffer(
 #[derive(Debug)]
 pub struct RoundedRectangle {
     pub radius: PhysicalBorderRadius,
+    /// The coverage of the corners when some corner isn't round.
+    pub shaped_corners: Option<alloc::boxed::Box<crate::shaped_corners::ShapedCorners>>,
     /// the border's width
     pub width: PhysicalLength,
     pub border_color: PremultipliedRgbaColor,

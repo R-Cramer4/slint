@@ -623,6 +623,8 @@ public:
     using DrawTextureArgs = cbindgen_private::DrawTextureArgs;
     /// Arguments for draw_rectangle
     using DrawRectangleArgs = cbindgen_private::DrawRectangleArgs;
+    /// The shape of a corner in DrawRectangleArgs
+    using CornerShape = cbindgen_private::CornerShape;
 
     /// Abstract base class for a target pixel buffer where certain drawing operations can be
     /// delegated. Use this to implement support for hardware accelerators such as DMA2D, PPA, or
@@ -652,6 +654,9 @@ public:
 
         /// Draw a rectangle specified by the DrawRectangleArgs. That rectangle must be clipped to
         /// the given region.
+        ///
+        /// Return false to let the software renderer draw a rectangle this implementation can't,
+        /// such as one with a corner shape other than `CornerShape::Tag::Round`.
         virtual bool draw_rectangle(const DrawRectangleArgs &args, const PhysicalRegion &clip) = 0;
 
     private:
