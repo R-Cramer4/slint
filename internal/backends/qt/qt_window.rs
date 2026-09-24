@@ -1863,6 +1863,7 @@ impl QtItemRenderer<'_> {
         };
         let brush: qttypes::QBrush = into_qbrush(brush, rect.width, rect.height);
         let border_color: qttypes::QBrush = into_qbrush(border_color, rect.width, rect.height);
+        let border_radius = border_radius.fit_to_size(rect.width as _, rect.height as _);
         let top_left_radius = border_radius.top_left;
         let top_right_radius = border_radius.top_right;
         let bottom_left_radius = border_radius.bottom_left;

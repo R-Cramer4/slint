@@ -2967,8 +2967,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
 
             let radius = (rect.border_radius().cast() * self.scale_factor)
                 .transformed(self.rotation)
-                .min(BorderRadius::from_length(geom.width_length() / 2.))
-                .min(BorderRadius::from_length(geom.height_length() / 2.));
+                .fit_to_size(geom.width(), geom.height());
 
             let border = rect.border_width().cast() * self.scale_factor;
             let border_color =

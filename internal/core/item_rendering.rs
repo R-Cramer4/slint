@@ -400,6 +400,7 @@ impl BorderRectLayout {
         // this is incorrect when the radius is smaller than that, but that can't be
         // helped - better a radius a bit too big than no radius.
         let fill_radius = (rect.border_radius().cast() * scale_factor)
+            .fit_to_size(geometry.width(), geometry.height())
             .outer(border_width / 2. + euclid::Length::new(0.01));
         let border_radius = fill_radius.inner(border_width / 2.);
 
@@ -451,7 +452,7 @@ pub fn clip_content_box(
             size.height_length() - border_width * two,
         ),
     );
-    (rect, radius.inner(border_width))
+    (rect, radius.fit_to_size(size.width, size.height).inner(border_width))
 }
 
 /// Trait for an item that represents an Image towards the renderer

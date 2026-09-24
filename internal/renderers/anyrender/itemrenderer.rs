@@ -520,7 +520,8 @@ impl<'a, S: PaintScene> ItemRenderer for AnyrenderItemRenderer<'a, S> {
         // anyrender's box shadow takes one uniform corner radius,
         // so approximate per-corner radii with their average
         // until vello grows support for non-uniform ones (linebender/vello#1245).
-        let radius = box_shadow.logical_border_radius() * sf;
+        let radius = (box_shadow.logical_border_radius() * sf)
+            .fit_to_size(phys_size.width, phys_size.height);
         let base_radius =
             (radius.top_left + radius.top_right + radius.bottom_right + radius.bottom_left) as f64
                 / 4.;

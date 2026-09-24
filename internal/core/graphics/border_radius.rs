@@ -208,6 +208,30 @@ impl<T, U> BorderRadius<T, U> {
         )
         .max(Self::zero())
     }
+
+    /// Returns the radii scaled down by a common factor, so that the two radii along each
+    /// side of a `width` x `height` rectangle fit within that side.
+    ///
+    /// This is how CSS resolves overlapping corners:
+    /// <https://drafts.csswg.org/css-backgrounds-3/#corner-overlap>.
+    pub fn fit_to_size(&self, width: T, height: T) -> Self
+    where
+        T: Copy + NumCast,
+    {
+        let f = |v: T| -> f32 { num_traits::cast(v).unwrap_or(0.) };
+        let (tl, tr, br, bl) =
+            (f(self.top_left), f(self.top_right), f(self.bottom_right), f(self.bottom_left));
+        let (width, height) = (f(width).max(0.), f(height).max(0.));
+        let factor = [(width, tl + tr), (width, bl + br), (height, tl + bl), (height, tr + br)]
+            .into_iter()
+            .filter(|&(_, sum)| sum > 0.)
+            .fold(1f32, |factor, (side, sum)| factor.min(side / sum));
+        if factor >= 1. {
+            return *self;
+        }
+        let scaled = |v: f32| -> T { num_traits::cast(v * factor).unwrap() };
+        BorderRadius::new(scaled(tl), scaled(tr), scaled(br), scaled(bl))
+    }
 }
 
 /// Trait for testing approximate equality
@@ -560,6 +584,23 @@ mod tests {
         assert!(!BorderRadius::new_uniform(1.0e-3).is_zero());
         assert!(IntBorderRadius::new_uniform(0).is_zero());
         assert!(!IntBorderRadius::new_uniform(1).is_zero());
+    }
+
+    #[test]
+    fn test_fit_to_size() {
+        // Every side already fits.
+        let radius = BorderRadius::new(10., 20., 30., 40.);
+        assert_eq!(radius.fit_to_size(100., 100.), radius);
+        // One radius over half the size isn't scaled while its neighbors leave room.
+        let radius = BorderRadius::new(40., 0., 0., 0.);
+        assert_eq!(radius.fit_to_size(48., 48.), radius);
+        // The tightest side scales all four corners: 30 + 50 along the 40 high right side.
+        let radius = BorderRadius::new(10., 30., 50., 10.);
+        assert_eq!(radius.fit_to_size(100., 40.), BorderRadius::new(5., 15., 25., 5.));
+        assert_eq!(
+            BorderRadius::new_uniform(40.).fit_to_size(48., 48.),
+            BorderRadius::new_uniform(24.)
+        );
     }
 
     #[test]

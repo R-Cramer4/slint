@@ -195,7 +195,8 @@ impl BoxShadowOptions {
             height,
             color,
             blur: box_shadow.blur() * scale_factor, // This effectively becomes the blur radius, so scale to physical pixels
-            radius: box_shadow.logical_border_radius() * scale_factor,
+            radius: (box_shadow.logical_border_radius() * scale_factor)
+                .fit_to_size(width.get(), height.get()),
             corner_shape: box_shadow.logical_corner_shape(),
             spread: box_shadow.spread() * scale_factor,
             inset,
