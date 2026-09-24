@@ -525,6 +525,23 @@ impl PartialEq for CornerShape {
     }
 }
 
+impl CornerShape {
+    /// The `scale` in `radius + spread * scale` that keeps a spread's ring the same width
+    /// all the way around a corner of this shape.
+    /// `Round` grows tangentially, so it alone gets `1`; `Notch`'s inner corner doesn't
+    /// move at all, so it gets `0`.
+    pub fn spread_scale(self) -> f32 {
+        match self {
+            CornerShape::Square | CornerShape::Notch => 0.,
+            CornerShape::Round => 1.,
+            CornerShape::Scoop => core::f32::consts::SQRT_2 - 1.,
+            CornerShape::Bevel => 2. - core::f32::consts::SQRT_2,
+            // A spread draws these as an exact offset curve instead of scaling them.
+            CornerShape::Squircle | CornerShape::Superellipse(_) => 1.,
+        }
+    }
+}
+
 impl ApproxEq<CornerShape> for CornerShape {
     #[inline]
     fn approx_eq(&self, other: &Self) -> bool {
@@ -534,6 +551,15 @@ impl ApproxEq<CornerShape> for CornerShape {
 
 /// The shape of each of the four corners, in the same order as [`BorderRadius`].
 pub type CornerShapes = BorderRadius<CornerShape, ()>;
+
+impl<U> BorderRadius<CornerShape, U> {
+    /// Returns `true` if every corner is [`CornerShape::Round`].
+    pub fn is_all_round(&self) -> bool {
+        [self.top_left, self.top_right, self.bottom_right, self.bottom_left]
+            .iter()
+            .all(|shape| *shape == CornerShape::Round)
+    }
+}
 
 #[cfg(test)]
 mod tests {

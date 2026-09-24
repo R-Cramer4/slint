@@ -380,28 +380,36 @@ impl BorderRectLayout {
         scale_factor: ScaleFactor,
     ) -> Option<Self> {
         // `cast()`: the logical Coord type can be i32, the physical geometry is f32.
-        let mut geometry = euclid::Rect::from_size(size.cast() * scale_factor);
+        Self::from_parts(
+            size.cast() * scale_factor,
+            rect.border_radius().cast() * scale_factor,
+            rect.border_corner_shape(),
+            rect.border_width().cast() * scale_factor,
+            rect.border_color(),
+        )
+    }
+
+    /// Computes the layout for a rectangle of `size` with the given corners and border, or
+    /// `None` when the geometry is empty.
+    pub fn from_parts(
+        size: euclid::Size2D<f32, PhysicalPx>,
+        radius: PhysicalBorderRadius,
+        corner_shape: CornerShapes,
+        border_width: euclid::Length<f32, PhysicalPx>,
+        border_color: Brush,
+    ) -> Option<Self> {
+        let mut geometry = euclid::Rect::from_size(size);
         if geometry.is_empty() {
             return None;
         }
         let brush_size = geometry.size;
 
-        let border_color = rect.border_color();
         let opaque_border = border_color.is_opaque();
-        let mut border_width = if border_color.is_transparent() {
-            euclid::Length::new(0.)
-        } else {
-            rect.border_width().cast() * scale_factor
-        };
+        let mut border_width =
+            if border_color.is_transparent() { euclid::Length::new(0.) } else { border_width };
 
-        // The stroke is centered on the path (50% inside, 50% outside), while in CSS the
-        // border is entirely inside the geometry. Ensure positive corner radii are at
-        // least half the border width, so that the outer edge keeps a radius at all;
-        // this is incorrect when the radius is smaller than that, but that can't be
-        // helped - better a radius a bit too big than no radius.
-        let fill_radius = (rect.border_radius().cast() * scale_factor)
-            .fit_to_size(geometry.width(), geometry.height())
-            .outer(border_width / 2. + euclid::Length::new(0.01));
+        let fill_radius =
+            border_fill_radius(radius.fit_to_size(size.width, size.height), border_width);
         let border_radius = fill_radius.inner(border_width / 2.);
 
         let (background_rect, background_radius) = if opaque_border {
@@ -423,11 +431,56 @@ impl BorderRectLayout {
             background_radius,
             border_rect: geometry,
             border_radius,
-            corner_shape: rect.border_corner_shape(),
+            corner_shape,
             border_width,
             border_color,
         })
     }
+
+    /// The background and border paths, for a layout whose corners aren't all round.
+    /// Fill both with the nonzero rule; the border path is `None` without a border.
+    #[cfg(feature = "path")]
+    pub fn shaped_paths(&self) -> (lyon_path::Path, Option<lyon_path::Path>) {
+        use crate::graphics::corner_path::{border_path, polygon_path, rounded_rect_path};
+        let background = || {
+            rounded_rect_path(
+                self.background_rect.to_untyped(),
+                self.background_radius,
+                self.corner_shape,
+            )
+        };
+        if self.border_width.get() <= 0. {
+            return (background(), None);
+        }
+        let contours = crate::graphics::corner_geometry::border_contours(
+            self.border_rect.to_untyped(),
+            self.border_radius,
+            self.corner_shape,
+            self.border_width.get(),
+        );
+        let background = if self.background_rect == self.border_rect {
+            background()
+        } else {
+            // A (semi-)transparent border: the background reaches the border's outer edge.
+            polygon_path(&contours.outer)
+        };
+        (background, Some(border_path(&contours)))
+    }
+}
+
+/// The radii of the fill under a border of `border_width`, for a rectangle with `radius`.
+/// The border's centerline has these radii reduced by half the border width.
+///
+/// The stroke is centered on the path (50% inside, 50% outside), while in CSS the
+/// border is entirely inside the geometry. Ensure positive corner radii are at
+/// least half the border width, so that the outer edge keeps a radius at all;
+/// this is incorrect when the radius is smaller than that, but that can't be
+/// helped - better a radius a bit too big than no radius.
+pub fn border_fill_radius(
+    radius: PhysicalBorderRadius,
+    border_width: euclid::Length<f32, PhysicalPx>,
+) -> PhysicalBorderRadius {
+    radius.outer(border_width / 2. + euclid::Length::new(0.01))
 }
 
 /// The region children are clipped to when `clip` is enabled on an element with a

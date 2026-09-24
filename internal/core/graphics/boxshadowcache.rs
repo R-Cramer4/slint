@@ -148,14 +148,84 @@ impl BoxShadowOptions {
         euclid::point2(self.blur.get(), self.blur.get())
     }
 
-    /// The corner radii of the shadow shape: `max(0, radius + spread)`.
+    /// The corner radii of the shadow shape: `max(0, radius + spread * scale)`, with `scale`
+    /// from [`CornerShape::spread_scale`](super::CornerShape::spread_scale).
+    /// A corner with no radius stays sharp, per CSS's `box-shadow` spread.
     pub fn outer_radius(&self) -> PhysicalBorderRadius {
-        (self.radius + PhysicalBorderRadius::new_uniform(self.spread.get())).max(Default::default())
+        self.offset_radius(self.spread.get())
     }
 
-    /// The corner radii of the hole an inset shadow leaves: `max(0, radius - spread)`.
+    /// The corner radii of the hole an inset shadow leaves: [`Self::outer_radius`] with the
+    /// spread negated.
     pub fn inner_radius(&self) -> PhysicalBorderRadius {
-        (self.radius - PhysicalBorderRadius::new_uniform(self.spread.get())).max(Default::default())
+        self.offset_radius(-self.spread.get())
+    }
+
+    fn offset_radius(&self, delta: f32) -> PhysicalBorderRadius {
+        let corner = |r: f32, shape: super::CornerShape| {
+            if r > 0. { (r + delta * shape.spread_scale()).max(0.) } else { 0. }
+        };
+        PhysicalBorderRadius::new(
+            corner(self.radius.top_left, self.corner_shape.top_left),
+            corner(self.radius.top_right, self.corner_shape.top_right),
+            corner(self.radius.bottom_right, self.corner_shape.bottom_right),
+            corner(self.radius.bottom_left, self.corner_shape.bottom_left),
+        )
+    }
+
+    /// The path of a drop shadow's shape, at [`Self::shape_origin`] within the drop shadow
+    /// texture.
+    #[cfg(feature = "path")]
+    pub fn drop_shadow_path(&self) -> lyon_path::Path {
+        super::corner_path::spread_rounded_rect_path(
+            euclid::Rect::new(self.shape_origin(), self.shape_size()).to_untyped(),
+            self.radius,
+            self.corner_shape,
+            self.spread.get(),
+        )
+    }
+
+    /// The hole an inset shadow leaves: the geometry inset by the spread on each side,
+    /// translated by the inset offset.
+    pub fn inset_hole_rect(&self) -> euclid::Rect<f32, PhysicalPx> {
+        let spread = self.spread.get();
+        euclid::Rect::new(
+            euclid::point2(spread + self.offset_x_inset, spread + self.offset_y_inset),
+            euclid::size2(
+                (self.width.get() - 2. * spread).max(0.),
+                (self.height.get() - 2. * spread).max(0.),
+            ),
+        )
+    }
+
+    /// The path an inset shadow paints before blur and clipping to the element's shape:
+    /// a rectangle inflated well past the geometry with [`Self::inset_hole_rect`] cut out.
+    /// Fill it with the even-odd rule.
+    #[cfg(feature = "path")]
+    pub fn inset_shadow_ring_path(&self) -> lyon_path::Path {
+        let (width, height) = (self.width.get(), self.height.get());
+        // Keeps the outer edge outside the geometry after the blur, an offset hole, or a
+        // negative spread.
+        let inflate = self.blur.get()
+            + self.spread.get().abs()
+            + self.offset_x_inset.abs()
+            + self.offset_y_inset.abs()
+            + 16.;
+        let outer = euclid::default::Rect::new(
+            euclid::point2(-inflate, -inflate),
+            euclid::size2(width + 2. * inflate, height + 2. * inflate),
+        );
+        let hole = super::corner_path::spread_rounded_rect_path(
+            self.inset_hole_rect().to_untyped(),
+            self.radius,
+            self.corner_shape,
+            -self.spread.get(),
+        );
+
+        let mut builder = lyon_path::Path::builder();
+        builder.add_rectangle(&outer.to_box2d(), lyon_path::Winding::Positive);
+        builder.extend_from_paths(&[hole.as_slice()]);
+        builder.build()
     }
 
     /// The Gaussian sigma corresponding to the CSS blur radius.
