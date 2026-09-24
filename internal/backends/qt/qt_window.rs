@@ -7,19 +7,20 @@ use cpp::*;
 use i_slint_common::sharedfontique::HashedBlob;
 use i_slint_core::DataTransfer;
 use i_slint_core::cursor::{MouseCursorInner, scaled_hotspot};
+use i_slint_core::graphics::corner_path::{rounded_rect_path, spread_rounded_rect_path};
 use i_slint_core::graphics::rendering_metrics_collector::{
     RenderingMetrics, RenderingMetricsCollector,
 };
 use i_slint_core::graphics::{
-    Brush, Color, ImageCacheKey, IntRect, Point, Rgba8Pixel, SharedImageBuffer, SharedPixelBuffer,
-    euclid,
+    Brush, Color, CornerShapes, ImageCacheKey, IntRect, Point, Rgba8Pixel, SharedImageBuffer,
+    SharedPixelBuffer, euclid,
 };
 use i_slint_core::input::{
     BackendDragEvent, BackendMouseEvent, InternalKeyEvent, KeyEvent, KeyEventType, TouchPhase,
 };
 use i_slint_core::item_rendering::{
-    CachedRenderingData, ItemCache, ItemRenderer, RenderBorderRectangle, RenderImage,
-    RenderRectangle, RenderText,
+    BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, RenderBorderRectangle,
+    RenderImage, RenderRectangle, RenderText,
 };
 use i_slint_core::item_tree::{
     ItemTreeRc, ItemTreeRef, ItemTreeRefPin, ItemTreeWeak, ParentItemTraversalMode,
@@ -689,6 +690,44 @@ impl QPainterPath {
     }
 }
 
+fn to_qpointf(p: Point) -> qttypes::QPointF {
+    qttypes::QPointF { x: p.x as _, y: p.y as _ }
+}
+
+/// Appends lyon path events to `painter_path`.
+fn to_painter_path(
+    painter_path: &mut QPainterPath,
+    events: impl IntoIterator<Item = lyon_path::Event<Point, Point>>,
+) {
+    for event in events {
+        match event {
+            lyon_path::Event::Begin { at } => {
+                painter_path.move_to(to_qpointf(at));
+            }
+            lyon_path::Event::Line { from: _, to } => {
+                painter_path.line_to(to_qpointf(to));
+            }
+            lyon_path::Event::Quadratic { from: _, ctrl, to } => {
+                painter_path.quad_to(to_qpointf(ctrl), to_qpointf(to));
+            }
+            lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
+                painter_path.cubic_to(to_qpointf(ctrl1), to_qpointf(ctrl2), to_qpointf(to));
+            }
+            lyon_path::Event::End { last: _, first: _, close } => {
+                // FIXME: are we supposed to do something with last and first?
+                if close {
+                    painter_path.close()
+                }
+            }
+        }
+    }
+}
+
+/// The spread a box shadow is drawn with: only non-round shapes grow by it.
+fn shadow_spread(box_shadow: Pin<&items::BoxShadow>) -> f32 {
+    if box_shadow.logical_corner_shape().is_all_round() { 0. } else { box_shadow.spread().get() }
+}
+
 fn into_qbrush(
     brush: i_slint_core::Brush,
     width: qttypes::qreal,
@@ -874,6 +913,7 @@ impl ItemRenderer for QtItemRenderer<'_> {
             rect.border_color(),
             rect.border_width().get(),
             rect.border_radius(),
+            rect.border_corner_shape(),
         );
     }
 
@@ -956,32 +996,7 @@ impl ItemRenderer for QtItemRenderer<'_> {
             FillRule::Nonzero | _ => key_generated::Qt_FillRule_WindingFill,
         });
 
-        for x in path_events.iter() {
-            fn to_qpointf(p: Point) -> qttypes::QPointF {
-                qttypes::QPointF { x: p.x as _, y: p.y as _ }
-            }
-            match x {
-                lyon_path::Event::Begin { at } => {
-                    painter_path.move_to(to_qpointf(at));
-                }
-                lyon_path::Event::Line { from: _, to } => {
-                    painter_path.line_to(to_qpointf(to));
-                }
-                lyon_path::Event::Quadratic { from: _, ctrl, to } => {
-                    painter_path.quad_to(to_qpointf(ctrl), to_qpointf(to));
-                }
-
-                lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
-                    painter_path.cubic_to(to_qpointf(ctrl1), to_qpointf(ctrl2), to_qpointf(to));
-                }
-                lyon_path::Event::End { last: _, first: _, close } => {
-                    // FIXME: are we supposed to do something with last and first?
-                    if close {
-                        painter_path.close()
-                    }
-                }
-            }
-        }
+        to_painter_path(&mut painter_path, path_events.iter());
 
         let anti_alias: bool = path.anti_alias();
 
@@ -1020,11 +1035,16 @@ impl ItemRenderer for QtItemRenderer<'_> {
         _size: LogicalSize,
     ) {
         let pixmap : qttypes::QPixmap = self.cache.get_or_update_cache_entry( item_rc, || {
+                let corner_shape = box_shadow.logical_corner_shape();
+                let spread = shadow_spread(box_shadow);
+
                 let shadow_rect = check_geometry!(item_rc.geometry().size);
+                let shape_width = (shadow_rect.width + 2. * spread as f64).max(0.);
+                let shape_height = (shadow_rect.height + 2. * spread as f64).max(0.);
 
                 let source_size = qttypes::QSize {
-                    width: shadow_rect.width.ceil() as _,
-                    height: shadow_rect.height.ceil() as _,
+                    width: shape_width.ceil() as _,
+                    height: shape_height.ceil() as _,
                 };
 
                 let mut source_image =
@@ -1036,14 +1056,46 @@ impl ItemRenderer for QtItemRenderer<'_> {
                     return std::make_unique<QPainter>(img);
                 });
 
-                Self::draw_rectangle_impl(
-                    &mut painter_,
-                    qttypes::QRectF { x: 0., y: 0., width: shadow_rect.width, height: shadow_rect.height },
-                    Brush::SolidColor(box_shadow.color()),
-                    Brush::default(),
-                    0.,
-                    box_shadow.logical_border_radius(),
-                );
+                if corner_shape.is_all_round() {
+                    Self::draw_rectangle_impl(
+                        &mut painter_,
+                        qttypes::QRectF { x: 0., y: 0., width: shadow_rect.width, height: shadow_rect.height },
+                        Brush::SolidColor(box_shadow.color()),
+                        Brush::default(),
+                        0.,
+                        box_shadow.logical_border_radius(),
+                        corner_shape,
+                    );
+                } else {
+                    let shape_rect = euclid::default::Rect::new(
+                        euclid::point2(0., 0.),
+                        euclid::size2(shape_width as f32, shape_height as f32),
+                    );
+                    let mut path = QPainterPath::default();
+                    to_painter_path(
+                        &mut path,
+                        spread_rounded_rect_path(
+                            shape_rect,
+                            box_shadow.logical_border_radius(),
+                            corner_shape,
+                            spread,
+                        )
+                        .iter(),
+                    );
+                    let brush: qttypes::QBrush = into_qbrush(
+                        Brush::SolidColor(box_shadow.color()),
+                        shape_width,
+                        shape_height,
+                    );
+                    let painter = &mut painter_;
+                    cpp! { unsafe [
+                            painter as "QPainterPtr*",
+                            brush as "QBrush",
+                            mut path as "QPainterPath"] {
+                        (*painter)->setRenderHint(QPainter::Antialiasing, true);
+                        (*painter)->fillPath(path, brush);
+                    }}
+                }
 
                 drop(painter_);
 
@@ -1081,11 +1133,12 @@ impl ItemRenderer for QtItemRenderer<'_> {
                 }
             });
 
-        let blur_radius = box_shadow.blur();
+        // The pixmap starts at the grown shape's corner, `spread` out from the element's.
+        let pad = box_shadow.blur() + LogicalLength::new(shadow_spread(box_shadow));
 
         let shadow_offset = qttypes::QPointF {
-            x: (box_shadow.offset_x() - blur_radius).get() as f64,
-            y: (box_shadow.offset_y() - blur_radius).get() as f64,
+            x: (box_shadow.offset_x() - pad).get() as f64,
+            y: (box_shadow.offset_y() - pad).get() as f64,
         };
 
         let painter: &mut QPainterPtr = &mut self.painter;
@@ -1131,8 +1184,17 @@ impl ItemRenderer for QtItemRenderer<'_> {
         &mut self,
         rect: LogicalRect,
         radius: LogicalBorderRadius,
-        _shape: i_slint_core::graphics::CornerShapes,
+        shape: CornerShapes,
     ) -> bool {
+        if !shape.is_all_round() && !radius.is_zero() {
+            let mut path = QPainterPath::default();
+            to_painter_path(&mut path, rounded_rect_path(rect.to_untyped(), radius, shape).iter());
+            let painter: &mut QPainterPtr = &mut self.painter;
+            return cpp! { unsafe [painter as "QPainterPtr*", mut path as "QPainterPath"] -> bool as "bool" {
+                (*painter)->setClipPath(path, Qt::IntersectClip);
+                return !(*painter)->clipBoundingRect().isEmpty();
+            }};
+        }
         let clip_rect = qttypes::QRectF {
             x: rect.min_x() as _,
             y: rect.min_y() as _,
@@ -1857,7 +1919,20 @@ impl QtItemRenderer<'_> {
         border_color: Brush,
         mut border_width: f32,
         border_radius: LogicalBorderRadius,
+        corner_shape: CornerShapes,
     ) {
+        if !corner_shape.is_all_round() {
+            Self::draw_shaped_rectangle(
+                painter,
+                rect,
+                brush,
+                border_color,
+                border_width,
+                border_radius,
+                corner_shape,
+            );
+            return;
+        }
         if border_color.is_transparent() {
             border_width = 0.;
         };
@@ -1916,6 +1991,57 @@ impl QtItemRenderer<'_> {
                 rect.adjust(border_width / 2, border_width / 2, -border_width / 2, -border_width / 2);
                 (*painter)->setPen(pen);
                 (*painter)->drawPath(to_painter_path(rect, tl_r, tr_r, br_r, bl_r));
+            }
+        }}
+    }
+
+    /// Draws a rectangle with a corner that isn't round, from the shared corner geometry.
+    fn draw_shaped_rectangle(
+        painter: &mut QPainterPtr,
+        rect: qttypes::QRectF,
+        brush: Brush,
+        border_color: Brush,
+        border_width: f32,
+        border_radius: LogicalBorderRadius,
+        corner_shape: CornerShapes,
+    ) {
+        // The painter works in logical pixels.
+        let unscaled = ScaleFactor::new(1.);
+        let Some(layout) = BorderRectLayout::from_parts(
+            euclid::size2(rect.width as f32, rect.height as f32),
+            border_radius * unscaled,
+            corner_shape,
+            LogicalLength::new(border_width) * unscaled,
+            border_color,
+        ) else {
+            return;
+        };
+        let (background_path, border_path) = layout.shaped_paths();
+        let mut background = QPainterPath::default();
+        to_painter_path(&mut background, background_path.iter());
+        let has_border = border_path.is_some();
+        let mut border = QPainterPath::default();
+        if let Some(border_path) = border_path {
+            to_painter_path(&mut border, border_path.iter());
+        }
+        let brush: qttypes::QBrush = into_qbrush(brush, rect.width, rect.height);
+        let border_brush: qttypes::QBrush =
+            into_qbrush(layout.border_color, rect.width, rect.height);
+        let origin = qttypes::QPointF { x: rect.x, y: rect.y };
+        cpp! { unsafe [
+                painter as "QPainterPtr*",
+                brush as "QBrush",
+                border_brush as "QBrush",
+                mut background as "QPainterPath",
+                mut border as "QPainterPath",
+                has_border as "bool",
+                origin as "QPointF"] {
+            (*painter)->save();
+            auto cleanup = qScopeGuard([&] { (*painter)->restore(); });
+            (*painter)->translate(origin);
+            (*painter)->fillPath(background, brush);
+            if (has_border) {
+                (*painter)->fillPath(border, border_brush);
             }
         }}
     }
