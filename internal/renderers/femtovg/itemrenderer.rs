@@ -10,10 +10,11 @@ use euclid::approxeq::ApproxEq;
 use femtovg::Transform2D;
 use i_slint_core::graphics::ResolvedBrush;
 use i_slint_core::graphics::boxshadowcache::BoxShadowCache;
+use i_slint_core::graphics::corner_path::rounded_rect_path;
 use i_slint_core::graphics::euclid::num::Zero;
 use i_slint_core::graphics::euclid::{self};
 use i_slint_core::graphics::rendering_metrics_collector::RenderingMetrics;
-use i_slint_core::graphics::{IntRect, Point, Size};
+use i_slint_core::graphics::{CornerShapes, IntRect, Point, Size};
 use i_slint_core::item_rendering::{
     BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, LayerRenderer,
     RenderBorderRectangle, RenderImage, RenderRectangle, RenderText,
@@ -23,7 +24,7 @@ use i_slint_core::items::{
 };
 use i_slint_core::lengths::{
     LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
-    ScaleFactor, logical_size_from_api,
+    PhysicalPx, ScaleFactor, logical_size_from_api,
 };
 use i_slint_core::textlayout::sharedparley::{self, GlyphRenderer, fontique, parley};
 use i_slint_core::{Brush, Color, ImageInner, SharedString};
@@ -104,7 +105,12 @@ pub struct GLItemRenderer<'a, R: femtovg::Renderer + TextureImporter> {
 fn rect_with_radius_to_path(
     rect: PhysicalRect,
     border_radius: PhysicalBorderRadius,
+    corner_shape: CornerShapes,
 ) -> femtovg::Path {
+    if !corner_shape.is_all_round() {
+        let path = rounded_rect_path(rect.to_untyped(), border_radius, corner_shape);
+        return to_femtovg_path(path.iter(), 1.);
+    }
     let mut path = femtovg::Path::new();
     let x = rect.origin.x;
     let y = rect.origin.y;
@@ -134,13 +140,164 @@ fn rect_with_radius_to_path(
     path
 }
 
+/// Converts lyon path events to a femtovg path, scaling every point by `scale`.
+fn to_femtovg_path(
+    events: impl IntoIterator<Item = lyon_path::Event<Point, Point>>,
+    scale: f32,
+) -> femtovg::Path {
+    let mut femtovg_path = femtovg::Path::new();
+
+    /// Contrary to the SVG spec, femtovg does not use the orientation of the path to
+    /// know if it needs to fill or not some part, it uses its own Solidity enum.
+    /// We must then compute ourself the orientation and set the Solidity accordingly.
+    #[derive(Default)]
+    struct OrientationCalculator {
+        area: f32,
+        prev: Point,
+    }
+
+    impl OrientationCalculator {
+        fn add_point(&mut self, p: Point) {
+            self.area += (p.x - self.prev.x) * (p.y + self.prev.y);
+            self.prev = p;
+        }
+    }
+
+    use femtovg::Solidity;
+
+    let mut orient = OrientationCalculator::default();
+
+    for x in events {
+        match x {
+            lyon_path::Event::Begin { at } => {
+                femtovg_path.solidity(if orient.area < 0. {
+                    Solidity::Hole
+                } else {
+                    Solidity::Solid
+                });
+                femtovg_path.move_to(at.x * scale, at.y * scale);
+                orient.area = 0.;
+                orient.prev = at;
+            }
+            lyon_path::Event::Line { from: _, to } => {
+                femtovg_path.line_to(to.x * scale, to.y * scale);
+                orient.add_point(to);
+            }
+            lyon_path::Event::Quadratic { from: _, ctrl, to } => {
+                femtovg_path.quad_to(ctrl.x * scale, ctrl.y * scale, to.x * scale, to.y * scale);
+                orient.add_point(to);
+            }
+
+            lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
+                femtovg_path.bezier_to(
+                    ctrl1.x * scale,
+                    ctrl1.y * scale,
+                    ctrl2.x * scale,
+                    ctrl2.y * scale,
+                    to.x * scale,
+                    to.y * scale,
+                );
+                orient.add_point(to);
+            }
+            lyon_path::Event::End { last: _, first: _, close } => {
+                femtovg_path.solidity(if orient.area < 0. {
+                    Solidity::Hole
+                } else {
+                    Solidity::Solid
+                });
+                if close {
+                    femtovg_path.close()
+                }
+            }
+        }
+    }
+    femtovg_path
+}
+
 fn rect_to_path(r: PhysicalRect) -> femtovg::Path {
-    rect_with_radius_to_path(r, PhysicalBorderRadius::default())
+    rect_with_radius_to_path(r, PhysicalBorderRadius::default(), CornerShapes::default())
+}
+
+/// The path of a drop shadow's shape within its texture: FemtoVG's native rounded rectangle
+/// when every corner is round, the exact spread path otherwise.
+fn drop_shadow_shape_path(
+    shadow_options: &i_slint_core::graphics::boxshadowcache::BoxShadowOptions,
+) -> femtovg::Path {
+    if shadow_options.corner_shape.is_all_round() {
+        rect_with_radius_to_path(
+            PhysicalRect::new(shadow_options.shape_origin(), shadow_options.shape_size()),
+            shadow_options.outer_radius(),
+            shadow_options.corner_shape,
+        )
+    } else {
+        to_femtovg_path(shadow_options.drop_shadow_path().iter(), 1.)
+    }
 }
 
 impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
     pub fn metrics(&self) -> RenderingMetrics {
         self.metrics.clone()
+    }
+
+    /// Renders a box shadow texture of `texture_size`: `mask_path` filled with `fill_rule`,
+    /// blurred, then tinted with the shadow color.
+    fn render_shadow_texture(
+        canvas: &CanvasRc<R>,
+        textures_to_delete_after_flush: &RefCell<Vec<Rc<Texture<R>>>>,
+        current_render_target: femtovg::RenderTarget,
+        shadow_options: &i_slint_core::graphics::boxshadowcache::BoxShadowOptions,
+        mask_path: &femtovg::Path,
+        fill_rule: femtovg::FillRule,
+        texture_size: euclid::Size2D<f32, PhysicalPx>,
+    ) -> Option<ItemGraphicsCacheEntry<R>> {
+        let texture_width = texture_size.width.ceil() as u32;
+        let texture_height = texture_size.height.ceil() as u32;
+
+        let mask_image = Texture::new_empty_on_gpu(canvas, texture_width, texture_height)?;
+
+        {
+            let mut canvas = canvas.borrow_mut();
+            canvas.save();
+            canvas.set_render_target(mask_image.as_render_target());
+            canvas.reset();
+            canvas.clear_rect(
+                0,
+                0,
+                texture_width,
+                texture_height,
+                femtovg::Color::rgba(0, 0, 0, 0),
+            );
+            canvas.fill_path(
+                mask_path,
+                &femtovg::Paint::color(femtovg::Color::rgb(255, 255, 255))
+                    .with_fill_rule(fill_rule),
+            );
+        }
+
+        let shadow_image = if shadow_options.blur.get() > 0. {
+            let blurred_image = mask_image
+                .filter(femtovg::ImageFilter::GaussianBlur { sigma: shadow_options.blur_sigma() });
+            canvas.borrow_mut().set_render_target(blurred_image.as_render_target());
+            textures_to_delete_after_flush.borrow_mut().push(mask_image);
+            blurred_image
+        } else {
+            mask_image
+        };
+
+        {
+            let mut canvas = canvas.borrow_mut();
+            canvas.global_composite_operation(femtovg::CompositeOperation::SourceIn);
+            let mut texture_rect = femtovg::Path::new();
+            texture_rect.rect(0., 0., texture_width as f32, texture_height as f32);
+            canvas.fill_path(
+                &texture_rect,
+                &femtovg::Paint::color(to_femtovg_color(&shadow_options.color)),
+            );
+            canvas.restore();
+            canvas.set_render_target(current_render_target);
+        }
+
+        Some(ItemGraphicsCacheEntry::Texture(shadow_image))
     }
 }
 
@@ -185,6 +342,18 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
 
         let fill_paint = self.brush_to_paint(rect.background(), layout.brush_size);
 
+        if !layout.corner_shape.is_all_round() {
+            let (background, border) = layout.shaped_paths();
+            let border_paint = self.brush_to_paint(layout.border_color, layout.brush_size);
+            let mut canvas = self.canvas.borrow_mut();
+            for (path, paint) in [(Some(background), fill_paint), (border, border_paint)] {
+                if let (Some(path), Some(paint)) = (path, paint) {
+                    canvas.fill_path(&to_femtovg_path(path.iter(), 1.), &paint);
+                }
+            }
+            return;
+        }
+
         let border_paint = if layout.border_width.get() > 0.0 {
             self.brush_to_paint(layout.border_color, layout.brush_size).map(|mut paint| {
                 paint.set_line_width(layout.border_width.get());
@@ -196,12 +365,19 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
 
         let mut canvas = self.canvas.borrow_mut();
         if let Some(paint) = fill_paint {
-            let background_path =
-                rect_with_radius_to_path(layout.background_rect, layout.background_radius);
+            let background_path = rect_with_radius_to_path(
+                layout.background_rect,
+                layout.background_radius,
+                layout.corner_shape,
+            );
             canvas.fill_path(&background_path, &paint);
         }
         if let Some(border_paint) = border_paint {
-            let border_path = rect_with_radius_to_path(layout.border_rect, layout.border_radius);
+            let border_path = rect_with_radius_to_path(
+                layout.border_rect,
+                layout.border_radius,
+                layout.corner_shape,
+            );
             canvas.stroke_path(&border_path, &border_paint);
         }
     }
@@ -271,79 +447,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             None => return,
         };
 
-        let mut femtovg_path = femtovg::Path::new();
-
-        /// Contrary to the SVG spec, femtovg does not use the orientation of the path to
-        /// know if it needs to fill or not some part, it uses its own Solidity enum.
-        /// We must then compute ourself the orientation and set the Solidity accordingly.
-        #[derive(Default)]
-        struct OrientationCalculator {
-            area: f32,
-            prev: Point,
-        }
-
-        impl OrientationCalculator {
-            fn add_point(&mut self, p: Point) {
-                self.area += (p.x - self.prev.x) * (p.y + self.prev.y);
-                self.prev = p;
-            }
-        }
-
-        use femtovg::Solidity;
-
-        let mut orient = OrientationCalculator::default();
-
-        for x in path_events.iter() {
-            match x {
-                lyon_path::Event::Begin { at } => {
-                    femtovg_path.solidity(if orient.area < 0. {
-                        Solidity::Hole
-                    } else {
-                        Solidity::Solid
-                    });
-                    femtovg_path
-                        .move_to(at.x * self.scale_factor.get(), at.y * self.scale_factor.get());
-                    orient.area = 0.;
-                    orient.prev = at;
-                }
-                lyon_path::Event::Line { from: _, to } => {
-                    femtovg_path
-                        .line_to(to.x * self.scale_factor.get(), to.y * self.scale_factor.get());
-                    orient.add_point(to);
-                }
-                lyon_path::Event::Quadratic { from: _, ctrl, to } => {
-                    femtovg_path.quad_to(
-                        ctrl.x * self.scale_factor.get(),
-                        ctrl.y * self.scale_factor.get(),
-                        to.x * self.scale_factor.get(),
-                        to.y * self.scale_factor.get(),
-                    );
-                    orient.add_point(to);
-                }
-
-                lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
-                    femtovg_path.bezier_to(
-                        ctrl1.x * self.scale_factor.get(),
-                        ctrl1.y * self.scale_factor.get(),
-                        ctrl2.x * self.scale_factor.get(),
-                        ctrl2.y * self.scale_factor.get(),
-                        to.x * self.scale_factor.get(),
-                        to.y * self.scale_factor.get(),
-                    );
-                    orient.add_point(to);
-                }
-                lyon_path::Event::End { last: _, first: _, close } => {
-                    femtovg_path.solidity(if orient.area < 0. {
-                        Solidity::Hole
-                    } else {
-                        Solidity::Solid
-                    });
-                    if close {
-                        femtovg_path.close()
-                    }
-                }
-            }
-        }
+        let femtovg_path = to_femtovg_path(path_events.iter(), self.scale_factor.get());
 
         let anti_alias = path.anti_alias();
 
@@ -401,107 +505,49 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
         item_rc: &ItemRc,
         _size: LogicalSize,
     ) {
+        let inset = box_shadow.inset();
+        let spread = box_shadow.spread() * self.scale_factor;
+
+        // Drop shadow with no offset / blur / spread is invisible.
         if box_shadow.color().alpha() == 0
-            || (box_shadow.blur() == LogicalLength::zero()
+            || (!inset
+                && box_shadow.blur() == LogicalLength::zero()
                 && box_shadow.offset_x() == LogicalLength::zero()
-                && box_shadow.offset_y() == LogicalLength::zero())
+                && box_shadow.offset_y() == LogicalLength::zero()
+                && spread == PhysicalLength::zero())
         {
             return;
         }
-        // TODO: implement inset shadows and spread for femtovg, using the shape_size,
-        // outer_radius and inner_radius of the BoxShadowOptions. Until then, skip rendering
-        // inset shadows entirely (otherwise they'd render incorrectly as a drop shadow).
-        // Spread is silently ignored.
-        if box_shadow.inset() {
-            return;
-        }
 
+        let current_render_target = self.current_render_target();
         let cache_entry = self.box_shadow_cache.get_box_shadow(
             item_rc,
             self.graphics_cache,
             box_shadow,
             self.scale_factor,
             |shadow_options| {
-                let blur = shadow_options.blur;
-                let width = shadow_options.width;
-                let height = shadow_options.height;
-                let radius = shadow_options.radius;
-
-                let shadow_rect = PhysicalRect::new(
-                    PhysicalPoint::default(),
-                    PhysicalSize::from_lengths(width + blur * 2., height + blur * 2.),
-                );
-
-                let shadow_image_width = shadow_rect.width().ceil() as u32;
-                let shadow_image_height = shadow_rect.height().ceil() as u32;
-
-                let shadow_image = Texture::new_empty_on_gpu(
-                    &self.canvas,
-                    shadow_image_width,
-                    shadow_image_height,
-                )?;
-
-                {
-                    let mut canvas = self.canvas.borrow_mut();
-                    canvas.save();
-
-                    canvas.set_render_target(shadow_image.as_render_target());
-
-                    canvas.reset();
-
-                    canvas.clear_rect(
-                        0,
-                        0,
-                        shadow_rect.width().ceil() as u32,
-                        shadow_rect.height().ceil() as u32,
-                        femtovg::Color::rgba(0, 0, 0, 0),
-                    );
-
-                    let shadow_path = rect_with_radius_to_path(
-                        PhysicalRect::new(
-                            shadow_options.shape_origin(),
-                            PhysicalSize::from_lengths(width, height),
-                        ),
-                        radius,
-                    );
-                    canvas.fill_path(
-                        &shadow_path,
-                        &femtovg::Paint::color(femtovg::Color::rgb(255, 255, 255)),
-                    );
-                }
-
-                let shadow_image = if blur.get() > 0. {
-                    let blurred_image = shadow_image.filter(femtovg::ImageFilter::GaussianBlur {
-                        sigma: shadow_options.blur_sigma(),
-                    });
-
-                    self.canvas.borrow_mut().set_render_target(blurred_image.as_render_target());
-
-                    self.textures_to_delete_after_flush.borrow_mut().push(shadow_image);
-
-                    blurred_image
+                let (mask_path, fill_rule, texture_size) = if shadow_options.inset {
+                    (
+                        to_femtovg_path(shadow_options.inset_shadow_ring_path().iter(), 1.),
+                        femtovg::FillRule::EvenOdd,
+                        euclid::size2(shadow_options.width.get(), shadow_options.height.get()),
+                    )
                 } else {
-                    shadow_image
+                    (
+                        drop_shadow_shape_path(shadow_options),
+                        femtovg::FillRule::NonZero,
+                        shadow_options.drop_texture_size(),
+                    )
                 };
-
-                {
-                    let mut canvas = self.canvas.borrow_mut();
-
-                    canvas.global_composite_operation(femtovg::CompositeOperation::SourceIn);
-
-                    let mut shadow_image_rect = femtovg::Path::new();
-                    shadow_image_rect.rect(0., 0., shadow_rect.width(), shadow_rect.height());
-                    canvas.fill_path(
-                        &shadow_image_rect,
-                        &femtovg::Paint::color(to_femtovg_color(&box_shadow.color())),
-                    );
-
-                    canvas.restore();
-
-                    canvas.set_render_target(self.current_render_target());
-                }
-
-                Some(ItemGraphicsCacheEntry::Texture(shadow_image))
+                Self::render_shadow_texture(
+                    &self.canvas,
+                    &self.textures_to_delete_after_flush,
+                    current_render_target,
+                    shadow_options,
+                    &mask_path,
+                    fill_rule,
+                    texture_size,
+                )
             },
         );
 
@@ -515,25 +561,45 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             None => return,
         };
 
-        // On the paint for the box shadow, we don't need anti-aliasing on the fringes,
-        // since we are just blitting a texture. This saves a triangle strip for the stroke.
-        let shadow_image_paint = shadow_image.as_paint().with_anti_alias(false);
+        if inset {
+            // The texture is sized to the geometry. FemtoVG has no path clip, so fill the
+            // element's shape with it instead.
+            let shape_path = rect_with_radius_to_path(
+                PhysicalRect::new(
+                    PhysicalPoint::default(),
+                    PhysicalSize::new(
+                        shadow_image_size.width as f32,
+                        shadow_image_size.height as f32,
+                    ),
+                ),
+                box_shadow.logical_border_radius() * self.scale_factor,
+                box_shadow.logical_corner_shape(),
+            );
+            let shadow_image_paint = shadow_image.as_paint();
+            self.canvas.borrow_mut().fill_path(&shape_path, &shadow_image_paint);
+        } else {
+            // On the paint for the box shadow, we don't need anti-aliasing on the fringes,
+            // since we are just blitting a texture. This saves a triangle strip for the stroke.
+            let shadow_image_paint = shadow_image.as_paint().with_anti_alias(false);
 
-        let mut shadow_image_rect = femtovg::Path::new();
-        shadow_image_rect.rect(
-            0.,
-            0.,
-            shadow_image_size.width as f32,
-            shadow_image_size.height as f32,
-        );
+            let mut shadow_image_rect = femtovg::Path::new();
+            shadow_image_rect.rect(
+                0.,
+                0.,
+                shadow_image_size.width as f32,
+                shadow_image_size.height as f32,
+            );
 
-        self.canvas.borrow_mut().save_with(|canvas| {
-            let blur = box_shadow.blur() * self.scale_factor;
-            let offset = LogicalPoint::from_lengths(box_shadow.offset_x(), box_shadow.offset_y())
-                * self.scale_factor;
-            canvas.translate(offset.x - blur.get(), offset.y - blur.get());
-            canvas.fill_path(&shadow_image_rect, &shadow_image_paint);
-        });
+            self.canvas.borrow_mut().save_with(|canvas| {
+                let blur = box_shadow.blur() * self.scale_factor;
+                let pad = blur.get() + spread.get().max(0.);
+                let offset =
+                    LogicalPoint::from_lengths(box_shadow.offset_x(), box_shadow.offset_y())
+                        * self.scale_factor;
+                canvas.translate(offset.x - pad, offset.y - pad);
+                canvas.fill_path(&shadow_image_rect, &shadow_image_paint);
+            });
+        }
     }
 
     fn visit_opacity(
@@ -582,6 +648,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             clip_item.logical_border_radius(),
             clip_item.border_width(),
         );
+        let clip_shape = clip_item.logical_corner_shape();
 
         // If clipping is enabled but the clip element is outside the visible range, then we don't
         // need to bother doing anything, not even rendering the children.
@@ -609,6 +676,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
                 let layer_path = rect_with_radius_to_path(
                     clip_rect * self.scale_factor,
                     clip_radius * self.scale_factor,
+                    clip_shape,
                 );
 
                 self.canvas.borrow_mut().save_with(|canvas| {
@@ -628,11 +696,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
             RenderingResult::ContinueRenderingWithoutChildren
         } else {
             self.layer_cache.release(item_rc);
-            self.combine_clip(
-                clip_rect,
-                clip_radius,
-                i_slint_core::graphics::CornerShapes::default(),
-            );
+            self.combine_clip(clip_rect, clip_radius, clip_shape);
             RenderingResult::ContinueRenderingChildren
         }
     }
@@ -641,7 +705,7 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
         &mut self,
         clip_rect: LogicalRect,
         radius: LogicalBorderRadius,
-        _shape: i_slint_core::graphics::CornerShapes,
+        _shape: CornerShapes,
     ) -> bool {
         let clip = &mut self.state.last_mut().unwrap().scissor;
         let clip_region_valid = match clip.intersection(&clip_rect) {
