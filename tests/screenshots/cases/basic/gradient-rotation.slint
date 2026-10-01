@@ -1,20 +1,24 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-// SIZE=32x32
 // BASE_THRESHOLD=3  - allow small differences in base case due to platform-specific atan2
 // ROTATION_THRESHOLD=3
-// SKIP_LINE_BY_LINE  - Path not implemented in line-by-line mode
 
+// Whole-pixel geometry, so every rotation covers the same pixels.
 export component TestCase inherits Window {
-    width: 32px;
+    width: 64px;
     height: 32px;
     background: white;
 
-    Path {
+    Rectangle {
+        x: 0px;
         width: 32px;
-        height: 32px;
-        commands: "M 0 0 L 100 0 L 50 100 Z";
-        fill: @conic-gradient(red 0deg, lime 120deg, blue 240deg, red 360deg);
+        background: @conic-gradient(red 0deg, lime 120deg, blue 240deg, red 360deg);
+    }
+
+    Rectangle {
+        x: 32px;
+        width: 32px;
+        background: @radial-gradient(circle, yellow 20%, blue);
     }
 }

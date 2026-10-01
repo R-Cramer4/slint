@@ -622,5 +622,7 @@ pub struct ConicGradientCommand {
     /// Stored as f32 to avoid i16 saturation for off-bbox centers at high scale factors.
     pub center_x: f32,
     pub center_y: f32,
+    /// Clockwise, in radians.
+    pub screen_rotation: f32,
     pub clip: GradientClip,
 }

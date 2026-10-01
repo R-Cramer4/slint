@@ -941,8 +941,9 @@ fn draw_radial_gradient(
         return;
     }
 
-    let center_x = rect.min_x() as f32 + g.center_x;
-    let center_y = rect.min_y() as f32 + g.center_y;
+    // See `draw_conic_gradient`.
+    let center_x = rect.min_x() as f32 + g.center_x - 0.5;
+    let center_y = rect.min_y() as f32 + g.center_y - 0.5;
 
     debug_assert!(
         g.radius >= 0.0,
@@ -1004,8 +1005,11 @@ fn draw_conic_gradient(
         return;
     }
 
-    let center_x = rect.min_x() as f32 + g.center_x;
-    let center_y = rect.min_y() as f32 + g.center_y;
+    // Shifting the center by half a pixel samples at pixel centers, so rotated renders line up.
+    let center_x = rect.min_x() as f32 + g.center_x - 0.5;
+    let center_y = rect.min_y() as f32 + g.center_y - 0.5;
+    // atan2 is 0 at east; position 0 is north, turned by the screen rotation.
+    let angle_offset = core::f32::consts::FRAC_PI_2 - g.screen_rotation;
 
     let start_x = rect.min_x() + extra_left_clip;
     let y = line.get() as f32;
@@ -1018,8 +1022,7 @@ fn draw_conic_gradient(
         let dy = y - center_y;
 
         // atan2 returns angle in radians from -π to π
-        // For 0deg at north (12 o'clock), we need to rotate by -90 degrees
-        let mut angle = dy.atan2(dx) + core::f32::consts::FRAC_PI_2;
+        let mut angle = dy.atan2(dx) + angle_offset;
 
         // Normalize angle to [0, 2π]
         while angle < 0.0 {

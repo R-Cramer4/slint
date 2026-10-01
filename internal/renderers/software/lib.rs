@@ -2007,12 +2007,10 @@ fn gradient_commands(
         // The clip must line up with the rounded rectangle's border, which is snapped by rounding.
         let rect =
             if clip.shape.radius.is_zero() { truncated_rect } else { draw_rect.round().cast() };
-        // The center stays where it is on the truncated rect, so a radius doesn't move the gradient.
-        let shift = truncated_rect.origin - rect.origin;
         (
             rect,
-            gradient_box.min_x() + cx - draw_rect.min_x() + shift.x as f32,
-            gradient_box.min_y() + cy - draw_rect.min_y() + shift.y as f32,
+            gradient_box.min_x() + cx - rect.min_x() as f32,
+            gradient_box.min_y() + cy - rect.min_y() as f32,
         )
     };
 
@@ -2189,6 +2187,7 @@ fn gradient_commands(
                     .collect(),
                 center_x,
                 center_y,
+                screen_rotation: rotation.angle().to_radians(),
                 clip,
             };
 
