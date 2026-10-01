@@ -1859,7 +1859,7 @@ trait ProcessScene {
         path_geometry: PhysicalRect,
         clip_geometry: PhysicalRect,
         commands: alloc::vec::Vec<path::Command>,
-        color: PremultipliedRgbaColor,
+        paint: path::Paint,
     );
     #[cfg(feature = "path")]
     fn process_stroked_path(
@@ -1867,7 +1867,7 @@ trait ProcessScene {
         path_geometry: PhysicalRect,
         clip_geometry: PhysicalRect,
         commands: alloc::vec::Vec<path::Command>,
-        color: PremultipliedRgbaColor,
+        paint: path::Paint,
         stroke_width: f32,
         stroke_line_cap: i_slint_core::items::LineCap,
         stroke_line_join: i_slint_core::items::LineJoin,
@@ -2017,7 +2017,7 @@ fn gradient_commands(
     };
 
     match brush {
-        Brush::LinearGradient(g) => {
+        Brush::LinearGradient(g) if g.stops().nth(1).is_some() => {
             let angle = g.angle() + rotation.angle();
             let axis_angle = (angle % 180. + 180.) % 180.;
             let tan = angle.to_radians().tan().abs();
@@ -2361,9 +2361,9 @@ impl<B: target_pixel_buffer::TargetPixelBuffer> ProcessScene for RenderToBuffer<
         path_geometry: PhysicalRect,
         clip_geometry: PhysicalRect,
         commands: alloc::vec::Vec<path::Command>,
-        color: PremultipliedRgbaColor,
+        paint: path::Paint,
     ) {
-        path::render_filled_path(&commands, &path_geometry, &clip_geometry, color, self.buffer);
+        path::render_filled_path(&commands, &path_geometry, &clip_geometry, &paint, self.buffer);
     }
 
     #[cfg(feature = "path")]
@@ -2372,7 +2372,7 @@ impl<B: target_pixel_buffer::TargetPixelBuffer> ProcessScene for RenderToBuffer<
         path_geometry: PhysicalRect,
         clip_geometry: PhysicalRect,
         commands: alloc::vec::Vec<path::Command>,
-        color: PremultipliedRgbaColor,
+        paint: path::Paint,
         stroke_width: f32,
         stroke_line_cap: i_slint_core::items::LineCap,
         stroke_line_join: i_slint_core::items::LineJoin,
@@ -2382,7 +2382,7 @@ impl<B: target_pixel_buffer::TargetPixelBuffer> ProcessScene for RenderToBuffer<
             &commands,
             &path_geometry,
             &clip_geometry,
-            color,
+            &paint,
             stroke_width,
             stroke_line_cap,
             stroke_line_join,
@@ -2532,7 +2532,7 @@ impl ProcessScene for PrepareScene {
         _path_geometry: PhysicalRect,
         _clip_geometry: PhysicalRect,
         _commands: alloc::vec::Vec<path::Command>,
-        _color: PremultipliedRgbaColor,
+        _paint: path::Paint,
     ) {
         // Path rendering is not supported in line-by-line mode (PrepareScene/render_by_line)
         // Only works with buffer-based rendering (RenderToBuffer)
@@ -2544,7 +2544,7 @@ impl ProcessScene for PrepareScene {
         _path_geometry: PhysicalRect,
         _clip_geometry: PhysicalRect,
         _commands: alloc::vec::Vec<path::Command>,
-        _color: PremultipliedRgbaColor,
+        _paint: path::Paint,
         _stroke_width: f32,
         _stroke_line_cap: i_slint_core::items::LineCap,
         _stroke_line_join: i_slint_core::items::LineJoin,
@@ -3348,6 +3348,10 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
         if !self.should_draw(&geom) {
             return;
         }
+        let alpha = (self.current_state.alpha * 255.) as u8;
+        if alpha == 0 {
+            return;
+        }
 
         // Get the fitted path events from the Path item
         let Some((offset, path_iterator)) = path.fitted_path_events(self_rc) else {
@@ -3356,6 +3360,9 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
 
         let physical_geom_f32 =
             geom.translate(self.current_state.offset.to_vector()).cast() * self.scale_factor;
+        let gradient_box = physical_geom_f32
+            .translate(offset.cast() * self.scale_factor)
+            .transformed(self.rotation);
         let rounded_geom = physical_geom_f32.round();
         let physical_geom = rounded_geom.cast().transformed(self.rotation);
 
@@ -3366,10 +3373,6 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
 
         let offset =
             offset.cast() * self.scale_factor + (physical_geom_f32.origin - rounded_geom.origin);
-
-        // Convert to zeno commands
-        let zeno_commands =
-            path::convert_path_data_to_zeno(path_iterator, rotation, self.scale_factor, offset);
 
         let physical_clip =
             (self.current_state.clip.translate(self.current_state.offset.to_vector()).cast()
@@ -3383,41 +3386,70 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
             return;
         };
 
+        // Convert to zeno commands
+        let zeno_commands =
+            path::convert_path_data_to_zeno(path_iterator, rotation, self.scale_factor, offset);
+
+        let orientation = self.rotation.orientation;
+        let scale_factor = self.scale_factor;
+        let resolve_paint = |brush: Brush| {
+            let mut gradients = Vec::new();
+            let fill = gradient_commands(
+                &brush,
+                alpha,
+                orientation,
+                gradient_box,
+                clipped_geom.cast(),
+                GradientClip::default(),
+                scale_factor,
+                &mut |rect, gradient| {
+                    debug_assert_eq!(rect, clipped_geom);
+                    gradients.push(gradient);
+                },
+            );
+            match fill {
+                BrushFill::Solid(color) => {
+                    let color = PremultipliedRgbaColor::from(color);
+                    (color.alpha > 0).then_some(path::Paint::Solid(color))
+                }
+                BrushFill::Gradient => Some(path::Paint::Gradient(gradients)),
+            }
+        };
+
         // Draw fill if specified
         let fill_brush = path.fill();
-        if !fill_brush.is_transparent() {
-            let fill_color = self.alpha_color(fill_brush.color());
-            if fill_color.alpha() > 0 {
-                self.processor.process_filled_path(
-                    physical_geom,
-                    clipped_geom,
-                    zeno_commands.clone(),
-                    fill_color.into(),
-                );
-            }
+        if !fill_brush.is_transparent()
+            && let Some(paint) = resolve_paint(fill_brush)
+        {
+            self.processor.process_filled_path(
+                physical_geom,
+                clipped_geom,
+                zeno_commands.clone(),
+                paint,
+            );
         }
 
         // Draw stroke if specified
         let stroke_brush = path.stroke();
         let stroke_width = path.stroke_width();
-        if !stroke_brush.is_transparent() && stroke_width.get() > 0 as Coord {
-            let stroke_color = self.alpha_color(stroke_brush.color());
-            if stroke_color.alpha() > 0 {
-                let physical_stroke_width = (stroke_width.cast() * self.scale_factor).get();
-                let stroke_line_cap = path.stroke_line_cap();
-                let stroke_line_join = path.stroke_line_join();
-                let stroke_miter_limit = path.stroke_miter_limit();
-                self.processor.process_stroked_path(
-                    physical_geom,
-                    clipped_geom,
-                    zeno_commands,
-                    stroke_color.into(),
-                    physical_stroke_width,
-                    stroke_line_cap,
-                    stroke_line_join,
-                    stroke_miter_limit,
-                );
-            }
+        if !stroke_brush.is_transparent()
+            && stroke_width.get() > 0 as Coord
+            && let Some(paint) = resolve_paint(stroke_brush)
+        {
+            let physical_stroke_width = (stroke_width.cast() * self.scale_factor).get();
+            let stroke_line_cap = path.stroke_line_cap();
+            let stroke_line_join = path.stroke_line_join();
+            let stroke_miter_limit = path.stroke_miter_limit();
+            self.processor.process_stroked_path(
+                physical_geom,
+                clipped_geom,
+                zeno_commands,
+                paint,
+                physical_stroke_width,
+                stroke_line_cap,
+                stroke_line_join,
+                stroke_miter_limit,
+            );
         }
     }
 
