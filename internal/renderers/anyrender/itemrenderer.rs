@@ -1058,7 +1058,7 @@ fn phys_rect_shape(rect: PhysicalRect, radius: PhysicalBorderRadius) -> RectShap
     if radius.is_zero() {
         return RectShape::Sharp(rect);
     }
-    RectShape::Rounded(kurbo::RoundedRect::from_rect(
+    RectShape::Rounded(CssRoundedRect::new(
         rect,
         kurbo::RoundedRectRadii::new(
             radius.top_left as f64,
@@ -1072,16 +1072,13 @@ fn phys_rect_shape(rect: PhysicalRect, radius: PhysicalBorderRadius) -> RectShap
 /// A rectangle that may have rounded corners, staying a plain
 /// [`kurbo::Rect`] when none of them do.
 ///
-/// [`kurbo::RoundedRect`] does not collapse zero radii: it emits one
-/// degenerate cubic per corner whatever the radii are, which backends then
-/// encode and flatten. Square corners are the common case in a user
-/// interface, and keeping those a `Rect` also keeps
-/// [`kurbo::Shape::as_rect`] answering, so a backend with a fast path for
-/// axis-aligned rectangles can still recognize one.
+/// Square corners are the common case in a user interface, and keeping those
+/// a `Rect` keeps [`kurbo::Shape::as_rect`] answering, so a backend with a
+/// fast path for axis-aligned rectangles can still recognize one.
 #[derive(Clone, Copy)]
 enum RectShape {
     Sharp(kurbo::Rect),
-    Rounded(kurbo::RoundedRect),
+    Rounded(CssRoundedRect),
 }
 
 impl RectShape {
@@ -1089,20 +1086,166 @@ impl RectShape {
     /// corners, already in device pixels.
     fn uniform(rect: kurbo::Rect, radius: f64) -> Self {
         if radius > 0. {
-            Self::Rounded(kurbo::RoundedRect::from_rect(rect, radius))
+            Self::Rounded(CssRoundedRect::new(rect, radius.into()))
         } else {
             Self::Sharp(rect)
         }
     }
 }
 
-// The rounded variant is the bigger one by far, but it is what kurbo itself
-// hands out for a rounded rectangle, and the iterator is a short-lived local.
-// Boxing it would move an allocation into every fill.
+/// A rounded rectangle whose radii scale down by one shared factor when
+/// neighboring corners don't fit a side, as CSS specifies:
+/// <https://drafts.csswg.org/css-backgrounds/#corner-overlap>
+///
+/// [`kurbo::RoundedRect`] can't express this: it clamps every radius to half
+/// the shortest side on its own, even when the neighboring corner leaves room.
+#[derive(Clone, Copy)]
+struct CssRoundedRect {
+    rect: kurbo::Rect,
+    radii: kurbo::RoundedRectRadii,
+}
+
+impl CssRoundedRect {
+    fn new(rect: kurbo::Rect, radii: kurbo::RoundedRectRadii) -> Self {
+        let rect = rect.abs();
+        // `max` also maps NaN to zero.
+        let tl = radii.top_left.max(0.);
+        let tr = radii.top_right.max(0.);
+        let br = radii.bottom_right.max(0.);
+        let bl = radii.bottom_left.max(0.);
+        let (width, height) = (rect.width(), rect.height());
+        let scale = [(width, tl + tr), (width, bl + br), (height, tl + bl), (height, tr + br)]
+            .into_iter()
+            .fold(1f64, |scale, (side, sum)| scale.min(side / sum));
+        Self {
+            rect,
+            radii: kurbo::RoundedRectRadii::new(tl * scale, tr * scale, br * scale, bl * scale),
+        }
+    }
+
+    /// The corners clockwise from the top left, in the order the path visits
+    /// them: each corner's radius, the center of its circle, and the
+    /// direction from that center towards the corner.
+    fn corners(&self) -> [(f64, kurbo::Point, kurbo::Vec2); 4] {
+        let kurbo::Rect { x0, y0, x1, y1 } = self.rect;
+        let kurbo::RoundedRectRadii { top_left, top_right, bottom_right, bottom_left } = self.radii;
+        [
+            (top_left, (x0 + top_left, y0 + top_left).into(), (-1., -1.).into()),
+            (top_right, (x1 - top_right, y0 + top_right).into(), (1., -1.).into()),
+            (bottom_right, (x1 - bottom_right, y1 - bottom_right).into(), (1., 1.).into()),
+            (bottom_left, (x0 + bottom_left, y1 - bottom_left).into(), (-1., 1.).into()),
+        ]
+    }
+}
+
+impl kurbo::Shape for CssRoundedRect {
+    type PathElementsIter<'iter> = CssRoundedRectPathIter;
+
+    fn path_elements(&self, tolerance: f64) -> CssRoundedRectPathIter {
+        let corners = self.corners();
+        let arc_start = |i: usize| {
+            let (radius, center, dir) = corners[i];
+            // Clockwise, every arc starts on the edge that leads into its corner.
+            if i.is_multiple_of(2) {
+                kurbo::Point::new(center.x + dir.x * radius, center.y)
+            } else {
+                kurbo::Point::new(center.x, center.y + dir.y * radius)
+            }
+        };
+        let arc = |i: usize| {
+            let (radius, center, _) = corners[i];
+            (radius > 0.).then(|| {
+                kurbo::Arc {
+                    center,
+                    radii: kurbo::Vec2::new(radius, radius),
+                    start_angle: std::f64::consts::FRAC_PI_2 * (i as f64 + 2.),
+                    sweep_angle: std::f64::consts::FRAC_PI_2,
+                    x_rotation: 0.,
+                }
+                .append_iter(tolerance)
+            })
+        };
+        CssRoundedRectPathIter {
+            idx: 0,
+            arc_starts: std::array::from_fn(arc_start),
+            arcs: std::array::from_fn(arc),
+        }
+    }
+
+    fn area(&self) -> f64 {
+        let r = self.radii;
+        let corners = [r.top_left, r.top_right, r.bottom_right, r.bottom_left];
+        self.rect.area()
+            + corners.iter().map(|r| (std::f64::consts::FRAC_PI_4 - 1.) * r * r).sum::<f64>()
+    }
+
+    fn perimeter(&self, _accuracy: f64) -> f64 {
+        let r = self.radii;
+        let corners = [r.top_left, r.top_right, r.bottom_right, r.bottom_left];
+        self.rect.perimeter(1.)
+            + corners.iter().map(|r| (std::f64::consts::FRAC_PI_2 - 2.) * r).sum::<f64>()
+    }
+
+    fn winding(&self, pt: kurbo::Point) -> i32 {
+        let kurbo::Rect { x0, y0, x1, y1 } = self.rect;
+        if pt.x < x0 || pt.x > x1 || pt.y < y0 || pt.y > y1 {
+            return 0;
+        }
+        // Opposite corners can overlap once a radius exceeds half a side, so
+        // the point has to pass every corner rather than just the nearest.
+        let cut_off = self.corners().into_iter().any(|(radius, center, dir)| {
+            let offset = pt - center;
+            offset.x * dir.x > 0. && offset.y * dir.y > 0. && offset.hypot2() > radius * radius
+        });
+        (!cut_off).into()
+    }
+
+    fn bounding_box(&self) -> kurbo::Rect {
+        self.rect
+    }
+}
+
+/// Starts at the top left arc, then alternates between each corner's arc and
+/// a line to the next corner; the last corner's line is the `ClosePath`.
+struct CssRoundedRectPathIter {
+    /// 0 before the `MoveTo`, `i + 1` while on corner `i`, 5 when done.
+    idx: usize,
+    arc_starts: [kurbo::Point; 4],
+    /// `None` for a square corner, which only needs the lines either side of it.
+    arcs: [Option<kurbo::ArcAppendIter>; 4],
+}
+
+impl Iterator for CssRoundedRectPathIter {
+    type Item = kurbo::PathEl;
+
+    fn next(&mut self) -> Option<kurbo::PathEl> {
+        match self.idx {
+            0 => {
+                self.idx = 1;
+                Some(kurbo::PathEl::MoveTo(self.arc_starts[0]))
+            }
+            1..=4 => {
+                let corner = self.idx - 1;
+                if let Some(el) = self.arcs[corner].as_mut().and_then(Iterator::next) {
+                    return Some(el);
+                }
+                self.idx += 1;
+                Some(match self.arc_starts.get(corner + 1) {
+                    Some(&next) => kurbo::PathEl::LineTo(next),
+                    None => kurbo::PathEl::ClosePath,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+// The rounded variant is the bigger one by far, but the iterator is a
+// short-lived local. Boxing it would move an allocation into every fill.
 #[allow(clippy::large_enum_variant)]
 enum RectShapePathIter {
     Sharp(kurbo::RectPathIter),
-    Rounded(kurbo::RoundedRectPathIter),
+    Rounded(CssRoundedRectPathIter),
 }
 
 impl Iterator for RectShapePathIter {
@@ -1117,7 +1260,7 @@ impl Iterator for RectShapePathIter {
 }
 
 /// Delegates to whichever variant is held, so that a `RectShape` behaves
-/// exactly like the `kurbo` shape inside it.
+/// exactly like the shape inside it.
 impl kurbo::Shape for RectShape {
     type PathElementsIter<'iter> = RectShapePathIter;
 
