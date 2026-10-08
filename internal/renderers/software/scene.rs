@@ -583,10 +583,48 @@ pub struct LinearGradientCommand {
     pub clip: GradientClip,
 }
 
+/// The fractional bits of a [`PremultipliedGradientStop::position`].
+pub const GRADIENT_POSITION_SHIFT: u32 = 16;
+/// The fractional bits of the interpolation factor between two stops.
+pub const GRADIENT_FACTOR_SHIFT: u32 = 12;
+
 #[derive(Clone, Copy, Debug)]
 pub struct PremultipliedGradientStop {
     pub color: PremultipliedRgbaColor,
-    pub position: f32,
+    /// In fixed point, with [`GRADIENT_POSITION_SHIFT`] fractional bits.
+    pub position: i32,
+    /// Turns the distance from `position` into the interpolation factor towards the next stop.
+    /// 0 when the next stop isn't after this one.
+    pub step: u32,
+}
+
+impl PremultipliedGradientStop {
+    pub fn collect(
+        stops: impl Iterator<Item = (PremultipliedRgbaColor, f32)>,
+    ) -> i_slint_core::SharedVector<Self> {
+        // Keeps the distance between any two stops within an i32.
+        const MAX_POSITION: f32 = (1 << (30 - GRADIENT_POSITION_SHIFT)) as f32;
+        let mut stops = stops
+            .map(|(color, position)| Self {
+                color,
+                position: (position.clamp(-MAX_POSITION, MAX_POSITION)
+                    * (1 << GRADIENT_POSITION_SHIFT) as f32) as i32,
+                step: 0,
+            })
+            .peekable();
+        core::iter::from_fn(|| {
+            let mut stop = stops.next()?;
+            if let Some(next) = stops.peek() {
+                let distance = next.position - stop.position;
+                if distance > 0 {
+                    stop.step =
+                        (1 << (GRADIENT_POSITION_SHIFT + GRADIENT_FACTOR_SHIFT)) / distance as u32;
+                }
+            }
+            Some(stop)
+        })
+        .collect()
+    }
 }
 
 /// Radial gradient that interpolates colors from the center outward
