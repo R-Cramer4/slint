@@ -31,8 +31,9 @@ export {
     FillSessionTarget, ShadowSession, ShadowGesture, ShadowValues, InspectorCommitResult, Hover, Preview, Project, Springboard,
 }
 
-component NewFileErrorPopup inherits PopupWindow {
+component CreateErrorPopup inherits PopupWindow {
     in property <DialogStyle> style: Style.dialog;
+    in property <bool> folder;
     in property <string> error;
     callback dismissed();
 
@@ -83,14 +84,16 @@ component NewFileErrorPopup inherits PopupWindow {
                             spacing: Metrics.space-small;
 
                             Text {
-                                text: @tr("Couldn’t create file");
+                                text: root.folder ? @tr("Couldn’t create folder") : @tr("Couldn’t create file");
                                 color: Colors.foreground;
                                 font-size: Typography.heading.size;
                                 font-weight: Typography.heading.weight;
                             }
 
                             Text {
-                                text: @tr("A new Slint file couldn’t be created in the project root.");
+                                text: root.folder
+                                    ? @tr("A new folder couldn’t be created in the project root.")
+                                    : @tr("A new Slint file couldn’t be created in the project root.");
                                 color: Colors.muted;
                                 font-size: Typography.body.size;
                                 wrap: word-wrap;
@@ -228,7 +231,8 @@ export component EditorUi inherits Window {
         root.width-budget - root.displayed-left-width);
     callback perform-native-window-zoom() -> bool;
     callback quit-requested();
-    private property <string> new-file-error;
+    private property <string> create-error;
+    private property <bool> create-error-is-folder;
     private property <bool> canvas-zoom-enabled: !Api.startup-wizard-visible
         && Api.editor-surface-mode == EditorSurfaceMode.component
         && CanvasView.navigation-enabled && !CanvasView.panning;
@@ -237,9 +241,18 @@ export component EditorUi inherits Window {
 
 
     function create-new-slint-file() {
-        root.new-file-error = Project.create-new-slint-file();
-        if root.new-file-error != "" {
-            new-file-error-popup.show();
+        root.show-create-error(Project.create-new-slint-file(), false);
+    }
+
+    function create-new-folder() {
+        root.show-create-error(Project.create-new-folder(), true);
+    }
+
+    function show-create-error(error: string, folder: bool) {
+        root.create-error = error;
+        root.create-error-is-folder = folder;
+        if error != "" {
+            create-error-popup.show();
         }
     }
 
@@ -562,6 +575,7 @@ export component EditorUi inherits Window {
                                 root.elements-pane-reset();
                             }
                             create-new-slint-file => { root.create-new-slint-file(); }
+                            create-new-folder => { root.create-new-folder(); }
                         }
 
                         canvas-viewport := Rectangle {
@@ -805,11 +819,12 @@ export component EditorUi inherits Window {
         if UpdateStatus.shows-bar(): UpdateStatusBar { }
     }
 
-    new-file-error-popup := NewFileErrorPopup {
+    create-error-popup := CreateErrorPopup {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
-        error: root.new-file-error;
-        dismissed => { root.new-file-error = ""; }
+        folder: root.create-error-is-folder;
+        error: root.create-error;
+        dismissed => { root.create-error = ""; }
     }
 
     if UpdateStatus.in-titlebar() && UpdateStatus.has-news(): UpdateStatusPill {

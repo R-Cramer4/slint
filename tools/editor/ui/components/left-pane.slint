@@ -8,9 +8,12 @@ import { Project } from "../project.slint";
 import { FileTreeView } from "file-tree-view.slint";
 import { ElementPalette } from "element-palette.slint";
 
-component NewSlintFileButton inherits Rectangle {
+component CreateButton inherits Rectangle {
     in property <ButtonStyle> style: Style.compact-button;
     in property <bool> enabled: true;
+    in property <image> icon;
+    in property <length> icon-offset-y;
+    in property <string> label;
     callback clicked();
     private property <PaintStyle> paint: !root.enabled ? root.style.appearance.disabled
         : touch.pressed ? root.style.appearance.pressed
@@ -23,7 +26,7 @@ component NewSlintFileButton inherits Rectangle {
     border-color: root.paint.border;
     opacity: root.enabled ? 1 : root.style.disabled-opacity;
     accessible-role: AccessibleRole.button;
-    accessible-label: @tr("New Slint file");
+    accessible-label: root.label;
     accessible-enabled: root.enabled;
     accessible-action-default => {
         if root.enabled {
@@ -32,9 +35,10 @@ component NewSlintFileButton inherits Rectangle {
     }
 
     Image {
+        y: (parent.height - self.height) / 2 + root.icon-offset-y;
         width: Metrics.icon-medium;
         height: Metrics.icon-medium;
-        source: @image-url("../assets/lucide/file-plus.svg");
+        source: root.icon;
         colorize: root.paint.foreground;
     }
 
@@ -45,7 +49,7 @@ component NewSlintFileButton inherits Rectangle {
     }
 
     Tooltip {
-        text: @markdown("\{@tr("New Slint file")}");
+        text: @markdown("\{root.label}");
     }
 }
 
@@ -106,6 +110,7 @@ export component LeftPane inherits Rectangle {
     callback elements-pane-resized(length);
     callback elements-pane-reset();
     callback create-new-slint-file();
+    callback create-new-folder();
 
     private property <bool> image-mode: Api.editor-surface-mode == EditorSurfaceMode.image;
     private property <length> default-elements-height: root.image-mode ? Style.panes.image-height : Style.panes.component-height;
@@ -185,11 +190,28 @@ export component LeftPane inherits Rectangle {
             SectionTitle {
                 label: @tr("FILES");
 
-                NewSlintFileButton {
+                HorizontalLayout {
                     x: parent.width - self.width;
                     y: -Metrics.space-medium;
-                    enabled: Project.file-tree.length > 0;
-                    clicked => { root.create-new-slint-file(); }
+                    width: self.preferred-width;
+                    height: self.preferred-height;
+                    spacing: Metrics.space-tight;
+
+                    CreateButton {
+                        icon: @image-url("../assets/lucide/folder-plus.svg");
+                        // Lucide's folder glyph ends 2 of 24 units above file-plus's bottom edge.
+                        icon-offset-y: Metrics.icon-medium * 2 / 24;
+                        label: @tr("New folder");
+                        enabled: Project.file-tree.length > 0;
+                        clicked => { root.create-new-folder(); }
+                    }
+
+                    CreateButton {
+                        icon: @image-url("../assets/lucide/file-plus.svg");
+                        label: @tr("New Slint file");
+                        enabled: Project.file-tree.length > 0;
+                        clicked => { root.create-new-slint-file(); }
+                    }
                 }
             }
 

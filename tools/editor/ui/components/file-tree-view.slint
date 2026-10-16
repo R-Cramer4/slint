@@ -23,6 +23,7 @@ component FileTreeRow inherits Rectangle {
     in property <string> rename-error;
 
     property <bool> folder: node.kind == FileTreeNodeKind.folder;
+    property <bool> project-root: node.parent-path == "";
     property <int> level-safe: max(1, node.indent-level + 1);
     property <int> gutter-segments: max(0, level-safe - 1);
     property <bool> row-has-hover: touch.has-hover;
@@ -89,7 +90,7 @@ component FileTreeRow inherits Rectangle {
     }
 
     function begin-rename() {
-        if !root.folder {
+        if !root.project-root {
             root.rename-name = root.node.label;
             root.rename-started(root.node.path);
         }
@@ -99,7 +100,7 @@ component FileTreeRow inherits Rectangle {
         focus-on-click: false;
 
         key-pressed(event) => {
-            if !root.folder && ((Platform.os == OperatingSystemType.macos && event.text == Key.Return)
+            if !root.project-root && ((Platform.os == OperatingSystemType.macos && event.text == Key.Return)
                     || (Platform.os != OperatingSystemType.macos && event.text == Key.F2)) {
                 root.begin-rename();
                 return accept;
@@ -285,7 +286,7 @@ component FileTreeRow inherits Rectangle {
                 root.activate();
             }
             pointer-event(event) => {
-                if !root.folder && event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                if !root.project-root && event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
                     root.focus-row();
                     context-menu.show({ x: self.mouse-x, y: self.mouse-y });
                 }

@@ -19,6 +19,7 @@ pub(in crate::preview) type SharedFileTreeController = Rc<RefCell<Option<FileTre
 
 const NEW_COMPONENT_NAME: &str = "NewComponent";
 const NEW_COMPONENT_CONTENTS: &str = "export component NewComponent {\n}\n";
+const NEW_FOLDER_NAME: &str = "NewFolder";
 
 pub fn setup(
     api: &Api<'_>,
@@ -31,27 +32,18 @@ pub fn setup(
 
     let controller: SharedFileTreeController = Rc::new(RefCell::new(None));
 
-    let controller_for_create = controller.clone();
-    let project_weak_for_create = project_weak.clone();
-    project.on_create_new_slint_file(move || {
-        let Some(project) = project_weak_for_create.upgrade() else {
-            return Default::default();
-        };
-        let mut controller = controller_for_create.borrow_mut();
-        let Some(controller) = controller.as_mut() else {
-            return Default::default();
-        };
-        controller.create_new_slint_file(&project).err().map_or_else(
-            SharedString::default,
-            |error| {
-                tracing::warn!(
-                    "Failed to create a Slint file in {}: {error}",
-                    controller.root.display()
-                );
-                error.to_shared_string()
-            },
-        )
-    });
+    project.on_create_new_slint_file(create_callback(
+        &controller,
+        &project_weak,
+        "a Slint file",
+        FileTreeController::create_new_slint_file,
+    ));
+    project.on_create_new_folder(create_callback(
+        &controller,
+        &project_weak,
+        "a folder",
+        FileTreeController::create_new_folder,
+    ));
 
     let controller_for_select = controller.clone();
     let api_weak_for_select = api_weak.clone();
@@ -88,11 +80,11 @@ pub fn setup(
         let Some(controller) = controller.as_mut() else {
             return tr::tr!("No project available").into();
         };
-        match controller.rename_file(Path::new(path.as_str()), name.as_str()) {
-            Ok((path, selected)) => {
+        match controller.rename(Path::new(path.as_str()), name.as_str()) {
+            Ok(moved_selection) => {
                 super::super::invalidate_file_history();
                 controller.publish(&project);
-                if selected {
+                if let Some(path) = moved_selection {
                     if is_slint_file(&path) {
                         super::super::request_preview_path(&path, None);
                     } else if is_image_file(&path) {
@@ -115,6 +107,29 @@ pub fn setup(
     api.on_copy_file_path(|path| copy_to_clipboard(&path, "file path"));
 
     controller
+}
+
+fn create_callback(
+    controller: &SharedFileTreeController,
+    project_weak: &slint::Weak<Project<'static>>,
+    what: &'static str,
+    create: fn(&mut FileTreeController, &Project<'_>) -> std::io::Result<()>,
+) -> impl Fn() -> SharedString + 'static {
+    let controller = controller.clone();
+    let project_weak = project_weak.clone();
+    move || {
+        let Some(project) = project_weak.upgrade() else {
+            return Default::default();
+        };
+        let mut controller = controller.borrow_mut();
+        let Some(controller) = controller.as_mut() else {
+            return Default::default();
+        };
+        create(controller, &project).err().map_or_else(SharedString::default, |error| {
+            tracing::warn!("Failed to create {what} in {}: {error}", controller.root.display());
+            error.to_shared_string()
+        })
+    }
 }
 
 fn copy_to_clipboard(text: &str, what: &str) {
@@ -181,6 +196,12 @@ impl FileTreeController {
         Ok(())
     }
 
+    fn create_new_folder(&mut self, project: &Project<'_>) -> std::io::Result<()> {
+        create_new_folder(&self.root)?;
+        self.publish(project);
+        Ok(())
+    }
+
     fn select(&mut self, path: &Path) {
         self.selected_path = Some(path.to_path_buf());
         self.active_folder_path = active_folder_for_path(path).unwrap_or(&self.root).to_path_buf();
@@ -208,10 +229,15 @@ impl FileTreeController {
         self.publish(project);
     }
 
-    fn rename_file(&mut self, path: &Path, name: &str) -> Result<(PathBuf, bool), String> {
+    fn rename(&mut self, path: &Path, name: &str) -> Result<Option<PathBuf>, String> {
         let path = self.path_in_root(path).ok_or_else(|| tr::tr!("File is outside the project"))?;
-        if !std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file()) {
-            return Err(tr::tr!("Only files can be renamed"));
+        if path == self.root {
+            return Err(tr::tr!("The project folder can't be renamed"));
+        }
+        let file_type = std::fs::symlink_metadata(&path).map(|metadata| metadata.file_type());
+        let is_folder = file_type.as_ref().is_ok_and(|file_type| file_type.is_dir());
+        if !is_folder && !file_type.is_ok_and(|file_type| file_type.is_file()) {
+            return Err(tr::tr!("Only files and folders can be renamed"));
         }
         let mut components = Path::new(name).components();
         if !matches!(components.next(), Some(Component::Normal(_)))
@@ -223,10 +249,11 @@ impl FileTreeController {
 
         let target = path.parent().ok_or_else(|| tr::tr!("File has no parent folder"))?.join(name);
         if target == path {
-            return Ok((path, self.selected_path.as_ref() == Some(&target)));
+            return Ok(None);
         }
-        let selected = self.selected_path.as_ref() == Some(&path);
-        if selected && file_surface_kind(&path) != file_surface_kind(&target) {
+        let selected =
+            self.selected_path.as_ref().is_some_and(|selected| selected.starts_with(&path));
+        if selected && !is_folder && file_surface_kind(&path) != file_surface_kind(&target) {
             return Err(tr::tr!("Keep the file type when renaming the open file"));
         }
 
@@ -241,10 +268,15 @@ impl FileTreeController {
             return Err(tr::tr!("Could not rename file: {}", error));
         }
         let target = std::fs::canonicalize(&target).unwrap_or(target);
-        if selected {
-            self.selected_path = Some(target.clone());
-        }
-        Ok((target, selected))
+        let moved = |old: &Path| match old.strip_prefix(&path) {
+            Ok(rest) if rest.as_os_str().is_empty() => target.clone(),
+            Ok(rest) => target.join(rest),
+            Err(_) => old.to_path_buf(),
+        };
+        self.selected_path = self.selected_path.as_deref().map(moved);
+        self.active_folder_path = moved(&self.active_folder_path);
+        self.expanded = self.expanded.iter().map(|expanded| moved(expanded)).collect();
+        Ok(if selected { self.selected_path.clone() } else { None })
     }
 
     fn publish(&self, project: &Project<'_>) {
@@ -278,10 +310,13 @@ impl FileTreeController {
     }
 }
 
+fn numbered_name(base: &str, index: u32) -> String {
+    if index == 1 { base.into() } else { format!("{base}{index}") }
+}
+
 fn create_new_component_file(root: &Path) -> std::io::Result<PathBuf> {
     for index in 1.. {
-        let suffix = if index == 1 { String::new() } else { index.to_string() };
-        let path = root.join(format!("{NEW_COMPONENT_NAME}{suffix}.slint"));
+        let path = root.join(format!("{}.slint", numbered_name(NEW_COMPONENT_NAME, index)));
         let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -295,6 +330,18 @@ fn create_new_component_file(root: &Path) -> std::io::Result<PathBuf> {
         return Ok(path);
     }
     unreachable!("unbounded file-name search must find a free path")
+}
+
+fn create_new_folder(root: &Path) -> std::io::Result<PathBuf> {
+    for index in 1.. {
+        let path = root.join(numbered_name(NEW_FOLDER_NAME, index));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("unbounded folder-name search must find a free path")
 }
 
 pub(in crate::preview) fn open_project(
@@ -746,7 +793,7 @@ mod tests {
         assert_ne!(collapsed, expanded);
         assert_eq!(labels(&collapsed.iter().collect::<Vec<_>>()), initial_labels);
 
-        controller.rename_file(&source, "zz.slint").unwrap();
+        controller.rename(&source, "zz.slint").unwrap();
         controller.publish(&project);
         let renamed = project.get_file_tree();
         assert_ne!(renamed, collapsed);
@@ -768,6 +815,56 @@ mod tests {
         assert_eq!(second, tree.root.join("NewComponent2.slint"));
         assert_eq!(fs::read_to_string(first).unwrap(), NEW_COMPONENT_CONTENTS);
         assert_eq!(fs::read_to_string(second).unwrap(), NEW_COMPONENT_CONTENTS);
+    }
+
+    #[test]
+    fn new_folders_use_unique_names() {
+        let tree = TempTree::new();
+
+        let first = create_new_folder(&tree.root).unwrap();
+        let second = create_new_folder(&tree.root).unwrap();
+
+        assert_eq!(first, tree.root.join("NewFolder"));
+        assert_eq!(second, tree.root.join("NewFolder2"));
+        assert!(is_directory(&first));
+        assert!(is_directory(&second));
+    }
+
+    #[test]
+    fn rename_folder_moves_nested_selection_and_expansion() {
+        let tree = TempTree::new();
+        let folder = tree.dir("components");
+        let nested = tree.dir("components/nested");
+        let selected = tree.file("components/nested/button.slint");
+        let mut controller = FileTreeController::new(tree.root.clone(), Some(selected));
+        controller.expanded.insert(std::fs::canonicalize(&folder).unwrap());
+        controller.expanded.insert(std::fs::canonicalize(&nested).unwrap());
+
+        let moved = controller.rename(&folder, "widgets").unwrap();
+
+        let target = std::fs::canonicalize(tree.root.join("widgets")).unwrap();
+        let expected = target.join("nested/button.slint");
+        assert!(!folder.exists());
+        assert!(expected.is_file());
+        assert_eq!(moved, Some(expected.clone()));
+        assert_eq!(controller.selected_path, Some(expected));
+        assert_eq!(controller.active_folder_path, target.join("nested"));
+        assert!(controller.expanded.contains(&target));
+        assert!(controller.expanded.contains(&target.join("nested")));
+        assert!(controller.expanded.contains(&controller.root));
+        assert_eq!(controller.expanded.len(), 3);
+    }
+
+    #[test]
+    fn rename_folder_without_selection_inside_keeps_selection() {
+        let tree = TempTree::new();
+        let folder = tree.dir("components");
+        let selected = std::fs::canonicalize(tree.file("main.slint")).unwrap();
+        let mut controller = FileTreeController::new(tree.root.clone(), Some(selected.clone()));
+
+        assert_eq!(controller.rename(&folder, "components.slint").unwrap(), None);
+        assert!(tree.root.join("components.slint").is_dir());
+        assert_eq!(controller.selected_path, Some(selected));
     }
 
     #[test]
@@ -1071,9 +1168,8 @@ mod tests {
         fs::write(&source, "original").unwrap();
         let mut controller = FileTreeController::new(tree.root.clone(), Some(source.clone()));
 
-        let (target, selected) = controller.rename_file(&source, "new.slint").unwrap();
+        let target = controller.rename(&source, "new.slint").unwrap().unwrap();
 
-        assert!(selected);
         assert!(!source.exists());
         assert_eq!(fs::read_to_string(&target).unwrap(), "original");
         assert_eq!(controller.selected_path, Some(target));
@@ -1088,7 +1184,7 @@ mod tests {
         let mut controller = FileTreeController::new(tree.root.clone(), None);
 
         assert_eq!(
-            controller.rename_file(&source, "target.slint").unwrap_err(),
+            controller.rename(&source, "target.slint").unwrap_err(),
             "A file with that name already exists"
         );
         assert!(source.exists());
@@ -1107,7 +1203,7 @@ mod tests {
         let mut controller = FileTreeController::new(tree.root.clone(), None);
 
         assert_eq!(
-            controller.rename_file(&source, "target.slint").unwrap_err(),
+            controller.rename(&source, "target.slint").unwrap_err(),
             "A file with that name already exists"
         );
         assert!(source.exists());
@@ -1121,25 +1217,24 @@ mod tests {
         let mut controller = FileTreeController::new(tree.root.clone(), Some(source.clone()));
 
         assert_eq!(
-            controller.rename_file(&source, "source.png").unwrap_err(),
+            controller.rename(&source, "source.png").unwrap_err(),
             "Keep the file type when renaming the open file"
         );
         assert!(source.exists());
     }
 
     #[test]
-    fn rename_file_rejects_folders_and_paths() {
+    fn rename_rejects_project_root_and_paths() {
         let tree = TempTree::new();
-        let folder = tree.dir("folder");
         let source = tree.file("source.slint");
         let mut controller = FileTreeController::new(tree.root.clone(), None);
 
         assert_eq!(
-            controller.rename_file(&folder, "renamed").unwrap_err(),
-            "Only files can be renamed"
+            controller.rename(&tree.root, "renamed").unwrap_err(),
+            "The project folder can't be renamed"
         );
         for name in ["", ".", "..", "nested/name.slint", "nested\\name.slint"] {
-            assert!(controller.rename_file(&source, name).is_err());
+            assert!(controller.rename(&source, name).is_err());
         }
     }
 
@@ -1151,7 +1246,7 @@ mod tests {
         let mut controller = FileTreeController::new(tree.root.clone(), None);
 
         assert_eq!(
-            controller.rename_file(&source, "C:name.slint").unwrap_err(),
+            controller.rename(&source, "C:name.slint").unwrap_err(),
             "Enter a valid file name"
         );
         assert!(source.exists());

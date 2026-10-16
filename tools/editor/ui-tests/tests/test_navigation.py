@@ -191,6 +191,37 @@ def test_file_tree_limits_rename_error_to_edited_row(
         expect(query(window, "A file with that name already exists")).to_be_visible()
 
 
+def test_file_tree_creates_and_renames_folder(
+    editor_binary: Path,
+    editor_environment: dict[str, str],
+    fixture_project: Path,
+) -> None:
+    source = fixture_project / "Main.slint"
+    folder = fixture_project / "NewFolder"
+    target = fixture_project / "Renamed"
+    with launch_editor(editor_binary, editor_environment, source) as editor:
+        wait_for_source(source, source.read_bytes())
+        window = first_window(editor)
+        element(
+            window, "New folder", role=slint_testing.AccessibleRole.Button
+        ).invoke_accessible_default_action()
+        expect.poll(folder.is_dir, message="new folder exists").to_equal(True)
+
+        file_row(window, folder).invoke_accessible_default_action()
+        press_key(window, keys.Return if sys.platform == "darwin" else keys.F2)
+        element(
+            window, "Rename NewFolder", role=slint_testing.AccessibleRole.TextInput
+        )
+        press_key(window, keys.Backspace)
+        press_keys(window, "Renamed")
+        press_key(window, keys.Return)
+
+        expect.poll(
+            lambda: target.is_dir() and not folder.exists(),
+            message="renamed folder exists and original is gone",
+        ).to_equal(True)
+
+
 def test_file_tree_opens_sibling_component(
     editor_binary: Path,
     editor_environment: dict[str, str],
