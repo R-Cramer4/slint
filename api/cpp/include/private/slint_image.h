@@ -4,6 +4,7 @@
 #pragma once
 #include <string_view>
 #include <span>
+#include <type_traits>
 #include "private/slint_generated_public.h"
 #include "private/slint_size.h"
 #include "private/slint_image_internal.h"
@@ -213,6 +214,43 @@ public:
                                   .height = buffer.height(),
                                   .data = buffer.m_data })))
     {
+    }
+
+    /// Constructs a new Image of size \a width x \a height whose pixel contents are (re-)computed
+    /// on demand by invoking \a render_fn whenever Slint actually composites it.
+    ///
+    /// \a render_fn is invoked with a writable span of `width * height` alpha-premultiplied RGBA8
+    /// pixels (row-major) to fill in, and the size of the image in physical pixels. The buffer is
+    /// reused across invocations, so filling it in does not allocate as long as nothing else is
+    /// still holding on to the previous frame's contents.
+    ///
+    /// Repainting is not automatic: after producing a new frame, call mark_procedural_dirty()
+    /// before handing this Image back to Slint (for example by re-assigning it to the property
+    /// it's bound to).
+    template<typename F>
+        requires(std::is_invocable_r_v<bool, F, std::span<Rgba8Pixel>, slint::PhysicalSize>)
+    [[nodiscard]] static Image from_procedural(uint32_t width, uint32_t height, F render_fn)
+    {
+        auto actual_cb = [](void *user_data, Rgba8Pixel *buffer, uintptr_t buffer_len,
+                             uint32_t physical_width, uint32_t physical_height) -> bool {
+            std::span<Rgba8Pixel> pixels(buffer, static_cast<size_t>(buffer_len));
+            return (*reinterpret_cast<F *>(user_data))(
+                    pixels, slint::PhysicalSize({ physical_width, physical_height }));
+        };
+        cbindgen_private::types::Image img(cbindgen_private::types::Image::ImageInner_None());
+        cbindgen_private::types::slint_image_from_procedural(
+                width, height, actual_cb,
+                [](void *user_data) { delete reinterpret_cast<F *>(user_data); },
+                new F(std::move(render_fn)), &img);
+        return Image(img);
+    }
+
+    /// Signals that a procedural image (created with Image::from_procedural()) has new content
+    /// to render. Returns false if this Image was not created via Image::from_procedural(); must
+    /// be called for the updated image to actually be drawn to the screen.
+    bool mark_procedural_dirty()
+    {
+        return cbindgen_private::types::slint_image_mark_procedural_dirty(&data);
     }
 
     /// Returns the size of the Image in pixels.

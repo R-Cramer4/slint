@@ -648,6 +648,8 @@ fn gen_corelib(
                 "slint_image_to_rgb8",
                 "slint_image_to_rgba8",
                 "slint_image_to_rgba8_premultiplied",
+                "slint_image_from_procedural",
+                "slint_image_mark_procedural_dirty",
                 "SharedPixelBuffer",
                 "SharedImageBuffer",
                 "StaticTextures",
@@ -656,7 +658,7 @@ fn gen_corelib(
                 "PHYSICAL_REGION_MAX_SIZE",
             ],
             "slint_image_internal.h",
-            "#include \"private/slint_color.h\"\nnamespace slint::cbindgen_private { struct ParsedSVG{}; struct HTMLImage{}; struct PhysicalPx; using namespace vtable; namespace types{ struct NineSliceImage{}; } }",
+            "#include \"private/slint_color.h\"\nnamespace slint::cbindgen_private { struct ParsedSVG{}; struct HTMLImage{}; struct PhysicalPx; using namespace vtable; namespace types{ struct NineSliceImage{}; struct ProceduralImage{}; } }",
         ),
         (
             vec!["Color", "slint_color_brighter", "slint_color_darker",

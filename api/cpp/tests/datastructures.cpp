@@ -275,6 +275,49 @@ TEST_CASE("Image buffer access")
     }
 }
 
+TEST_CASE("Procedural image")
+{
+    using namespace slint;
+
+    int render_count = 0;
+    auto img = Image::from_procedural(
+            2, 1, [&render_count](std::span<Rgba8Pixel> buffer, PhysicalSize size) -> bool {
+                REQUIRE(size.width == 2);
+                REQUIRE(size.height == 1);
+                REQUIRE(buffer.size() == 2);
+                render_count++;
+                buffer[0] = Rgba8Pixel { 255, 0, 0, 255 };
+                buffer[1] = Rgba8Pixel { 0, 255, 0, 255 };
+                return true;
+            });
+
+    {
+        auto size = img.size();
+        REQUIRE(size.width == 2);
+        REQUIRE(size.height == 1);
+    }
+
+    // An unmodified clone must compare equal: re-assigning it to a property without
+    // signaling a new frame must not look like a change.
+    auto clone_before = img;
+    REQUIRE(img == clone_before);
+
+    REQUIRE(img.mark_procedural_dirty());
+    auto clone_after = img;
+    REQUIRE(clone_before != clone_after);
+    REQUIRE(img == clone_after);
+
+    auto rgba = img.to_rgba8_premultiplied();
+    REQUIRE(rgba.has_value());
+    REQUIRE(render_count == 1);
+    REQUIRE(rgba->width() == 2);
+    REQUIRE(rgba->height() == 1);
+    REQUIRE(*rgba->begin() == Rgba8Pixel { 255, 0, 0, 255 });
+
+    Image non_procedural(SharedPixelBuffer<Rgba8Pixel> {});
+    REQUIRE(!non_procedural.mark_procedural_dirty());
+}
+
 TEST_CASE("SharedVector")
 {
     using namespace slint;

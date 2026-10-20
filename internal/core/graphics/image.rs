@@ -1664,6 +1664,7 @@ pub(crate) mod ffi {
     #![allow(unsafe_code)]
 
     use super::*;
+    use core::ffi::c_void;
 
     // Expand Rgb8Pixel so that cbindgen can see it. (is in fact rgb::RGB<u8>)
     /// Represents an RGB pixel.
@@ -1823,6 +1824,62 @@ pub(crate) mod ffi {
             *height = pixel_buffer.height();
             true
         })
+    }
+
+    /// Call [`Image::from_procedural`]. `render` is invoked with `user_data`, a pointer to (and
+    /// the length of) the buffer to fill in, and the size of the image in physical pixels.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slint_image_from_procedural(
+        width: u32,
+        height: u32,
+        render: extern "C" fn(
+            user_data: *mut c_void,
+            buffer: *mut Rgba8Pixel,
+            buffer_len: usize,
+            physical_width: u32,
+            physical_height: u32,
+        ) -> bool,
+        drop_user_data: extern "C" fn(user_data: *mut c_void),
+        user_data: *mut c_void,
+        image: *mut Image,
+    ) {
+        struct CRenderer {
+            render: extern "C" fn(*mut c_void, *mut Rgba8Pixel, usize, u32, u32) -> bool,
+            drop_user_data: extern "C" fn(*mut c_void),
+            user_data: *mut c_void,
+        }
+
+        impl Drop for CRenderer {
+            fn drop(&mut self) {
+                (self.drop_user_data)(self.user_data)
+            }
+        }
+
+        let c_renderer = CRenderer { render, drop_user_data, user_data };
+
+        unsafe {
+            core::ptr::write(
+                image,
+                Image::from_procedural(width, height, move |buf, size| {
+                    // Force capturing `c_renderer` as a whole (instead of just its `Copy` fields)
+                    // so that its `Drop` impl only runs when this closure itself is dropped.
+                    let c_renderer = &c_renderer;
+                    (c_renderer.render)(
+                        c_renderer.user_data,
+                        buf.as_mut_ptr(),
+                        buf.len(),
+                        size.width,
+                        size.height,
+                    )
+                }),
+            )
+        };
+    }
+
+    /// Call [`Image::mark_procedural_dirty`]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slint_image_mark_procedural_dirty(image: *mut Image) -> bool {
+        unsafe { (*image).mark_procedural_dirty() }
     }
 }
 
